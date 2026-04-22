@@ -1,0 +1,12 @@
+node_modules/
+build/
+dist/
+dist */
+*backup*/
+korábbi verziók/
+coverage/
+.DS_Store
+*.log
+*.zip
+.env*
+!.env.example

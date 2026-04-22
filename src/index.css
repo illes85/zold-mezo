@@ -1,0 +1,19 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;700;800;900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", ui-sans-serif, system-ui, sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+.icon-emerald {
+  filter: invert(43%) sepia(36%) saturate(1530%) hue-rotate(120deg) brightness(95%) contrast(98%);
+}
+
+.icon-stone {
+  filter: invert(76%) sepia(6%) saturate(417%) hue-rotate(336deg) brightness(88%) contrast(85%);
+}

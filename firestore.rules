@@ -1,0 +1,97 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+       return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (request.auth.uid == "hUJzNpNYX9bdQVpRrUvKyVQTOIp2" || 
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+         (request.auth.token.email == "szi.illes85@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidSiteSettings(data) {
+      return hasOnlyAllowedFields([
+        'showHero', 'showFeatures', 'showAbout', 'showServices', 'showGallery', 'showContact',
+        'heroTitle', 'heroSubtitle', 'heroDescription', 'aboutText', 'servicesText',
+        'contactEmail', 'contactPhone', 'primaryColor', 'servicesLayout', 'servicesListStartSide',
+        'sections'
+      ]) &&
+             (!('showHero' in data) || data.showHero is bool) &&
+             (!('showFeatures' in data) || data.showFeatures is bool) &&
+             (!('showAbout' in data) || data.showAbout is bool) &&
+             (!('showServices' in data) || data.showServices is bool) &&
+             (!('showGallery' in data) || data.showGallery is bool) &&
+             (!('showContact' in data) || data.showContact is bool) &&
+             (!('sections' in data) || data.sections is list);
+    }
+
+    function isValidCalculatorSettings(settings) {
+      // We are more lenient with optional fields to avoid null-check failures
+      let validFields = [
+        'traktorMinPrice', 'traktorBasePrice', 'traktorDiscountPrice', 'traktorExcludedTerrains',
+        'tologatosMinPrice', 'tologatosSmallAreaPrice', 'tologatosMediumAreaPrice', 'tologatosLargeAreaPrice', 'tologatosExcludedTerrains',
+        'kaszoMinPrice', 'kaszoBasePrice', 'kaszoDiscountPrice', 'kaszoExcludedTerrains',
+        'multiplierSteep', 'multiplierVerySteep', 'multiplierRegular', 'multiplierDifficult', 'multiplierHighGrass', 'multiplierFrequent',
+        'scytheTerrainMultiplier', 'wateringTerrainMultiplier',
+        'wateringMinPrice', 'wateringTreePrice', 'wateringPlantPrice', 'wateringExcludedTerrains',
+        'wateringTreePrice1', 'wateringTreePrice2', 'wateringTreePrice3',
+        'wateringPlantPrice1', 'wateringPlantPrice2', 'wateringPlantPrice3',
+        'hedgeTrimmingMinPrice', 'hedgeTrimmingBasePrice', 'hedgeTrimmingExcludedTerrains',
+        'showUnitPricePerService', 'prohibitedOptions', 'serviceCosts',
+        'distanceFeePerKm', 'distanceFreeKm', 'distanceAffectsMinOnly',
+        'discountRegularPercent', 'discountFrequentPercent'
+      ];
+      return hasOnlyAllowedFields(validFields);
+    }
+
+    function isValidService(data) {
+      return hasOnlyAllowedFields(['id', 'title', 'description', 'iconName', 'iconUrl', 'image', 'isActive', 'order']) &&
+             data.id is string && data.id.size() > 0 &&
+             data.title is string && data.title.size() > 0 &&
+             data.isActive is bool &&
+             data.order is number;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /settings/{document} {
+      allow read: if true;
+      allow create, update: if isAdmin();
+      allow delete: if false;
+    }
+
+    match /services/{serviceId} {
+      allow read: if true;
+      allow create, update: if isAdmin() && isValidService(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /users/{userId} {
+      allow read: if (request.auth != null && request.auth.uid == userId) || isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /quotes/{quoteId} {
+      allow read: if isAdmin();
+      allow create: if true;
+      allow update, delete: if isAdmin();
+    }
+  }
+}

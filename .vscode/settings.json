@@ -1,0 +1,14 @@
+{
+  "files.exclude": {
+    "dist **/": true,
+    "dist backup **/": true,
+    "nethely backup **/": true,
+    "korábbi verziók/": true,
+    "*.zip": true
+  },
+  "search.exclude": {
+    "**/dist *": true,
+    "**/korábbi verziók": true,
+    "**/*backup*": true
+  }
+}
