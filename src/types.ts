@@ -111,9 +111,21 @@ export interface CalculatorSettings {
   multiplierHighGrass?: number;       // Magas fű szorzó
   showDoubleCutText?: boolean;        // Magas fű felirat be/ki
 
-  // Rendszeresség kedvezmények (%-ban)
+  // Rendszeresség kedvezmények (%-ban) - ELAVULT, de megőrizzük a kompatibilitás miatt
   discountRegularPercent: number;   // havi 1x kedvezmény
   discountFrequentPercent: number;  // havi többszöri kedvezmény
+
+  // Új rugalmas kedvezmények
+  frequencyDiscountSettings?: {
+    monthly1: { type: 'percent' | 'fixed', value: number },
+    monthlyMore: { type: 'percent' | 'fixed', value: number }
+  };
+
+  // Akciók/Promóciók - Csak vizuális cimke és üzenet
+  promotions?: Record<string, {
+    isActive: boolean,
+    message: string
+  }>;
 
   // Távolságdíj
   distanceFreeKm: number;            // Ingyenes km limit (pl. 10)
@@ -134,6 +146,10 @@ export interface CalculatorSettings {
   // Belső költségek szolgáltatásonként
   serviceCosts?: Record<string, { label: string, value: number }[]>;
   prohibitedOptions?: Record<string, string[]>;
+
+  // Fűnyírási logika szabályok
+  tologatosMaxArea?: number;           // Alapérték: 2500
+  forceTologatosOnVerySegmented?: boolean; // Nagyon tagolt terep → tologatós
 }
 
 export const defaultCalculatorSettings: CalculatorSettings = {
@@ -179,6 +195,13 @@ export const defaultCalculatorSettings: CalculatorSettings = {
   discountRegularPercent: 10,
   discountFrequentPercent: 15,
 
+  frequencyDiscountSettings: {
+    monthly1: { type: 'percent', value: 10 },
+    monthlyMore: { type: 'percent', value: 15 }
+  },
+
+  promotions: {},
+
   distanceFreeKm: 0,
   distanceLimit1: 30,
   distanceLimit1FeePerKm: 400,
@@ -199,6 +222,8 @@ export const defaultCalculatorSettings: CalculatorSettings = {
   },
   prohibitedOptions: {},
   serviceCosts: {},
+  tologatosMaxArea: 2500,
+  forceTologatosOnVerySegmented: true,
 };
 
 export const defaultSettings: SiteSettings = {

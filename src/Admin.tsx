@@ -4,7 +4,7 @@ import { db, auth, googleProvider, handleFirestoreError, OperationType } from '.
 import { signInWithPopup, signOut } from 'firebase/auth';
 import { collection, updateDoc, doc, query, orderBy, onSnapshot, serverTimestamp, getDoc, setDoc, getDocs, deleteDoc } from 'firebase/firestore';
 import { motion } from 'motion/react';
-import { Settings, Save, LogOut, LayoutDashboard, List, FileText, Check, X, AlertCircle, Calculator, Plus, Trash2, UploadCloud, ChevronUp, ChevronDown, Axe, Car, HardHat, Droplets, Scissors, MapPin, Mail, Phone, Calendar } from 'lucide-react';
+import { Settings, Save, LogOut, LayoutDashboard, List, FileText, Check, X, AlertCircle, Calculator, Plus, Trash2, UploadCloud, ChevronUp, ChevronDown, Axe, Car, HardHat, Droplets, Scissors, MapPin, Mail, Phone, Calendar, Tractor } from 'lucide-react';
 import { CalculatorSettings, defaultCalculatorSettings, SectionBlock, CustomBlock, QuoteRequest, QuoteImage } from './types';
 import { v4 as uuidv4 } from 'uuid';
 import ImageCropperModal from './components/ImageCropperModal';
@@ -433,8 +433,74 @@ export default function Admin() {
     const [isCompleting, setIsCompleting] = useState(false);
     const [viewerIndex, setViewerIndex] = useState<number | null>(null);
     const [viewerType, setViewerType] = useState<'before' | 'after'>('before');
+    const [isDeletingId, setIsDeletingId] = useState<string | null>(null);
 
-    const filteredQuotes = quotes.filter(q => statusFilter === 'all' || q.status === statusFilter);
+    const filteredQuotes = quotes.filter(q => {
+      if (statusFilter === 'trash') return q.status === 'deleted';
+      if (statusFilter === 'all') return q.status !== 'deleted';
+      return q.status === statusFilter;
+    });
+
+    const groupQuotesByDate = (quotes: QuoteRequest[]) => {
+      const groups: Record<string, QuoteRequest[]> = {
+        'Ez a hét': [],
+        'Múlt hét': [],
+        'Korábbiak ebben a hónapban': [],
+      };
+
+      const now = new Date();
+      const startOfThisWeek = new Date(now);
+      startOfThisWeek.setDate(now.getDate() - now.getDay() + (now.getDay() === 0 ? -6 : 1));
+      startOfThisWeek.setHours(0, 0, 0, 0);
+
+      const startOfLastWeek = new Date(startOfThisWeek);
+      startOfLastWeek.setDate(startOfThisWeek.getDate() - 7);
+
+      const startOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+      quotes.forEach(q => {
+        const date = q.createdAt?.toDate ? q.createdAt.toDate() : new Date();
+        if (date >= startOfThisWeek) {
+          groups['Ez a hét'].push(q);
+        } else if (date >= startOfLastWeek) {
+          groups['Múlt hét'].push(q);
+        } else if (date >= startOfThisMonth) {
+          groups['Korábbiak ebben a hónapban'].push(q);
+        } else {
+          const monthYear = date.toLocaleString('hu-HU', { year: 'numeric', month: 'long' });
+          if (!groups[monthYear]) groups[monthYear] = [];
+          groups[monthYear].push(q);
+        }
+      });
+
+      return groups;
+    };
+
+    const groupedQuotes = groupQuotesByDate(filteredQuotes);
+
+    const handleDeleteQuote = async (quote: QuoteRequest, docId: string) => {
+      try {
+        if (quote.status === 'deleted') {
+          // Permanent delete
+          await deleteDoc(doc(db, 'quotes', docId));
+        } else {
+          // Move to trash
+          await updateDoc(doc(db, 'quotes', docId), { status: 'deleted' });
+        }
+        setIsDeletingId(null);
+      } catch (error) {
+        console.error("Delete error", error);
+        alert("Hiba történt a művelet során.");
+      }
+    };
+
+    const handleRestoreQuote = async (docId: string) => {
+      try {
+        await updateDoc(doc(db, 'quotes', docId), { status: 'pending' });
+      } catch (error) {
+        console.error("Restore error", error);
+      }
+    };
 
     const updateQuoteStatus = async (quoteId: string, docId: string, newStatus: string) => {
       try {
@@ -469,8 +535,18 @@ export default function Admin() {
             body: formData
           });
 
-          if (!response.ok) throw new Error('Hiba történt a képfeltöltés során');
-          const result = await response.json();
+          const resText = await response.text();
+          let result;
+          try {
+            result = JSON.parse(resText);
+          } catch (e) {
+            console.warn("Upload PHP response is not JSON (likely dev mode).", resText);
+            if (import.meta.env.DEV) {
+              result = { success: true, url: URL.createObjectURL(file) };
+            } else {
+              throw new Error('Érvénytelen válasz a szervertől a képfeltöltés során.');
+            }
+          }
 
           if (result.success) {
             newImages.push({
@@ -479,7 +555,7 @@ export default function Admin() {
               uploadedAt: new Date()
             });
           } else {
-            throw new Error(result.error);
+            throw new Error(result.error || 'Fájlfeltöltési hiba');
           }
         }
 
@@ -491,17 +567,27 @@ export default function Admin() {
         });
 
         // Trigger Before/After email via mail.php
-        await fetch('/mail.php', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            type: 'job_completed',
-            quoteId: quote.id,
-            customerEmail: quote.customerEmail,
-            customerName: quote.customerName,
-            images: newImages
-          })
-        });
+        try {
+          const mailRes = await fetch('/mail.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'job_completed',
+              quoteId: quote.id,
+              customerEmail: quote.customerEmail,
+              customerName: quote.customerName,
+              images: newImages
+            })
+          });
+          const mailText = await mailRes.text();
+          try {
+            JSON.parse(mailText);
+          } catch(e) {
+            console.warn("Mail PHP response is not JSON (likely dev mode).", mailText);
+          }
+        } catch (e) {
+          console.error("Mail notification error", e);
+        }
 
         alert("Munka sikeresen lezárva és értesítés elküldve!");
         setSelectedQuote(null);
@@ -523,82 +609,132 @@ export default function Admin() {
               <p className="text-stone-600">Beérkező megkeresések és munkák kezelése.</p>
             </div>
             <div className="flex gap-2">
-              {['all', 'pending', 'accepted', 'completed', 'rejected'].map(status => (
+              {['all', 'pending', 'accepted', 'completed', 'rejected', 'trash'].map(status => (
                 <button
                   key={status}
                   onClick={() => setStatusFilter(status)}
                   className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${statusFilter === status ? 'bg-emerald-600 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`}
                 >
-                  {status === 'all' ? 'Összes' : status === 'pending' ? 'Új' : status === 'accepted' ? 'Elfogadva' : status === 'completed' ? 'Kész' : 'Elutasítva'}
+                  {status === 'all' ? 'Aktívak' : 
+                   status === 'pending' ? 'Új' : 
+                   status === 'accepted' ? 'Elfogadva' : 
+                   status === 'completed' ? 'Kész' : 
+                   status === 'rejected' ? 'Elutasítva' : 'Lomtár'}
                 </button>
               ))}
             </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4">
-          {filteredQuotes.map(quote => {
-            const docId = (quote as any).id; // Firestore internal ID
+        <div className="space-y-8">
+          {Object.entries(groupedQuotes).map(([groupName, groupQuotes]) => {
+            if (groupQuotes.length === 0) return null;
             return (
-              <div key={quote.id} className="bg-white rounded-2xl border border-stone-200 overflow-hidden hover:shadow-md transition-shadow">
-                <div className="p-6">
-                  <div className="flex justify-between items-start mb-4">
-                    <div>
-                      <span className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider mb-2 ${quote.status === 'pending' ? 'bg-amber-100 text-amber-700' :
-                          quote.status === 'accepted' ? 'bg-blue-100 text-blue-700' :
-                            quote.status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
-                              'bg-stone-100 text-stone-700'
-                        }`}>
-                        {quote.status}
-                      </span>
-                      <h3 className="text-xl font-bold text-stone-900">{quote.customerName}</h3>
-                      <p className="text-stone-500 text-sm flex items-center gap-1">
-                        <MapPin className="w-3 h-3" /> {quote.details?.settlement || 'N/A'} • {quote.serviceType}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xl font-black text-emerald-600">{quote.calculatedPrice?.toLocaleString('hu-HU')} Ft</p>
-                      <p className="text-xs text-stone-400">{quote.createdAt?.toDate().toLocaleString('hu-HU') || 'N/A'}</p>
-                    </div>
-                  </div>
+              <div key={groupName} className="space-y-4">
+                <h2 className="text-sm font-bold text-stone-400 uppercase tracking-widest px-2">{groupName}</h2>
+                <div className="grid grid-cols-1 gap-4">
+                  {groupQuotes.map(quote => {
+                    const docId = (quote as any).id;
+                    return (
+                      <div key={quote.id} className="bg-white rounded-2xl border border-stone-200 overflow-hidden hover:shadow-md transition-shadow">
+                        <div className="p-6">
+                          <div className="flex justify-between items-start mb-4">
+                            <div>
+                              <span className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider mb-2 ${quote.status === 'pending' ? 'bg-amber-100 text-amber-700' :
+                                quote.status === 'accepted' ? 'bg-blue-100 text-blue-700' :
+                                  quote.status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
+                                    'bg-stone-100 text-stone-700'
+                                }`}>
+                                {quote.status === 'pending' ? 'Új' : quote.status === 'accepted' ? 'Elfogadva' : quote.status === 'completed' ? 'Kész' : 'Elutasítva'}
+                              </span>
+                              <h3 className="text-xl font-bold text-stone-900">{quote.customerName}</h3>
+                              <p className="text-stone-500 text-sm flex items-center gap-1">
+                                <MapPin className="w-3 h-3" /> {quote.details?.settlement || 'N/A'} • {quote.serviceType}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-xl font-black text-emerald-600">{quote.calculatedPrice?.toLocaleString('hu-HU')} Ft</p>
+                              <p className="text-xs text-stone-400">{quote.createdAt?.toDate().toLocaleString('hu-HU') || 'N/A'}</p>
+                            </div>
+                          </div>
 
-                  <div className="flex gap-4 mb-6 overflow-x-auto pb-2 scrollbar-hide">
-                    {quote.images?.filter(img => img.type === 'before').map((img, i) => (
-                      <img key={i} src={img.url} className="w-20 h-20 object-cover rounded-lg border border-stone-100 flex-shrink-0" alt="Work" />
-                    ))}
-                    {quote.images?.length === 0 && <div className="text-xs text-stone-400 italic">Nincsenek fotók beküldve.</div>}
-                  </div>
+                          <div className="flex gap-4 mb-6 overflow-x-auto pb-2 scrollbar-hide">
+                            {quote.images?.filter(img => img.type === 'before').map((img, i) => (
+                              <img key={i} src={img.url} className="w-20 h-20 object-cover rounded-lg border border-stone-100 flex-shrink-0" alt="Work" />
+                            ))}
+                            {quote.images?.filter(img => img.type === 'before').length === 0 && <div className="text-xs text-stone-400 italic">Nincsenek fotók beküldve.</div>}
+                          </div>
 
-                  <div className="flex items-center justify-between pt-4 border-t border-stone-50">
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => setSelectedQuote(quote)}
-                        className="px-4 py-2 bg-stone-900 text-white text-sm font-bold rounded-lg hover:bg-stone-800 transition-colors"
-                      >
-                        Részletek
-                      </button>
-                    </div>
-                    <div className="flex gap-2">
-                      {quote.status === 'pending' && (
-                        <>
-                          <button onClick={() => updateQuoteStatus(quote.id, docId, 'accepted')} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="Elfogadás"><Check className="w-5 h-5" /></button>
-                          <button onClick={() => updateQuoteStatus(quote.id, docId, 'rejected')} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Elutasítás"><X className="w-5 h-5" /></button>
-                        </>
-                      )}
-                      {quote.status === 'accepted' && (
-                        <button
-                          onClick={() => setSelectedQuote(quote)}
-                          className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white text-sm font-bold rounded-lg hover:bg-emerald-700 transition-colors"
-                        >
-                          <Check className="w-4 h-4" /> Munka kész!
-                        </button>
-                      )}
-                    </div>
-                  </div>
+                          <div className="flex items-center justify-between pt-4 border-t border-stone-50">
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => setSelectedQuote(quote)}
+                                className="px-4 py-2 bg-stone-900 text-white text-sm font-bold rounded-lg hover:bg-stone-800 transition-colors"
+                              >
+                                Részletek
+                              </button>
+                              
+                              {/* Törlés gomb */}
+                              {isDeletingId === quote.id ? (
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    onClick={() => handleDeleteQuote(quote, docId)}
+                                    className="flex items-center gap-2 px-3 py-2 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 transition-colors shadow-sm"
+                                  >
+                                    {quote.status === 'deleted' ? 'Végleges törlés' : 'Törlés megerősítése'}
+                                  </button>
+                                  <button
+                                    onClick={() => setIsDeletingId(null)}
+                                    className="px-3 py-2 bg-stone-100 text-stone-600 text-xs font-bold rounded-lg hover:bg-stone-200 transition-colors"
+                                  >
+                                    Mégsem
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={() => setIsDeletingId(quote.id)}
+                                  className="p-2 text-stone-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                  title={quote.status === 'deleted' ? "Végleges törlés" : "Törlés / Lomtár"}
+                                >
+                                  <Trash2 className="w-5 h-5" />
+                                </button>
+                              )}
+
+                              {quote.status === 'deleted' && (
+                                <button
+                                  onClick={() => handleRestoreQuote(docId)}
+                                  className="flex items-center gap-2 px-3 py-2 bg-emerald-50 text-emerald-600 text-xs font-bold rounded-lg hover:bg-emerald-100 transition-colors"
+                                >
+                                  Visszaállítás
+                                </button>
+                              )}
+                            </div>
+                            <div className="flex gap-2">
+                              {(quote.status === 'pending' || quote.status === 'rejected') && (
+                                <button onClick={() => updateQuoteStatus(quote.id, docId, 'accepted')} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="Elfogadás"><Check className="w-5 h-5" /></button>
+                              )}
+                              {(quote.status === 'pending' || quote.status === 'accepted') && (
+                                <button onClick={() => updateQuoteStatus(quote.id, docId, 'rejected')} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Elutasítás"><X className="w-5 h-5" /></button>
+                              )}
+                              {quote.status === 'accepted' && (
+                                <button
+                                  onClick={() => setSelectedQuote(quote)}
+                                  className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white text-sm font-bold rounded-lg hover:bg-emerald-700 transition-colors"
+                                >
+                                  <Check className="w-4 h-4" /> Munka kész!
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             );
           })}
+
           {filteredQuotes.length === 0 && (
             <div className="text-center py-20 bg-stone-50 rounded-3xl border border-dashed border-stone-200">
               <FileText className="w-12 h-12 text-stone-300 mx-auto mb-4" />
@@ -609,8 +745,16 @@ export default function Admin() {
 
         {/* Detail/Action Modal */}
         {selectedQuote && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/50 backdrop-blur-sm">
-            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white rounded-3xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl">
+          <div 
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/50 backdrop-blur-sm"
+            onClick={() => { setSelectedQuote(null); setAfterImages([]); }}
+          >
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }} 
+              animate={{ scale: 1, opacity: 1 }} 
+              className="bg-white rounded-3xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
               <div className="p-6 border-b border-stone-100 flex justify-between items-center sticky top-0 bg-white z-10">
                 <h2 className="text-2xl font-bold">Részletek: {selectedQuote.customerName}</h2>
                 <button onClick={() => { setSelectedQuote(null); setAfterImages([]); }} className="p-2 hover:bg-stone-100 rounded-full"><X className="w-6 h-6" /></button>
@@ -623,7 +767,33 @@ export default function Admin() {
                       <p className="flex items-center gap-2 text-stone-800"><Phone className="w-4 h-4 text-emerald-600" /> {selectedQuote.customerPhone}</p>
                       <p className="flex items-center gap-2 text-stone-800"><Mail className="w-4 h-4 text-emerald-600" /> {selectedQuote.customerEmail || 'Nincs megadva'}</p>
                       <p className="flex items-center gap-2 text-stone-800"><MapPin className="w-4 h-4 text-emerald-600" /> {selectedQuote.details?.settlement || 'N/A'}</p>
-                      <p className="flex items-center gap-2 text-stone-800"><Calendar className="w-4 h-4 text-emerald-600" /> {selectedQuote.preferredDays?.join(', ') || 'Nincs megadva'}</p>
+                      <div className="space-y-3">
+                        <label className="text-[10px] font-bold text-stone-400 uppercase tracking-widest block">Alkalmas napok</label>
+                        <div className="grid grid-cols-7 gap-1">
+                          {['H', 'K', 'Sze', 'Cs', 'P', 'Szo', 'V'].map((day, idx) => {
+                            const isSelected = selectedQuote.preferredDays?.includes(day) || selectedQuote.preferredDays?.includes('a hét bármely napján');
+                            return (
+                              <div 
+                                key={day} 
+                                className={`flex flex-col items-center justify-center py-2 rounded-lg border text-[10px] font-bold transition-colors ${
+                                  isSelected 
+                                    ? 'bg-emerald-600 border-emerald-600 text-white shadow-sm' 
+                                    : 'bg-stone-50 border-stone-100 text-stone-400'
+                                }`}
+                              >
+                                {day}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {selectedQuote.preferredDays?.includes('a hét bármely napján') && (
+                          <div className="mt-2 text-center">
+                             <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full border border-emerald-100 italic">
+                               A hét bármely napján megfelelő
+                             </span>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                   <div className="space-y-4">
@@ -635,7 +805,12 @@ export default function Admin() {
 
                 <div className="space-y-4 pt-6 border-t border-stone-50">
                   <h4 className="text-xs font-bold text-stone-400 uppercase tracking-widest">Üzenet / Megjegyzés</h4>
-                  <p className="text-stone-700 whitespace-pre-line bg-stone-50 p-4 rounded-xl text-sm italic">"{selectedQuote.message}"</p>
+                  <div className="bg-stone-50 p-6 rounded-2xl border border-stone-100 relative">
+                    <span className="absolute -top-3 left-6 px-2 bg-stone-50 text-[10px] font-black text-stone-300 uppercase italic">Üzenet</span>
+                    <p className="text-stone-700 whitespace-pre-line text-sm italic font-medium leading-relaxed">
+                      "{selectedQuote.message || 'Az ügyfél nem hagyott üzenetet.'}"
+                    </p>
+                  </div>
                 </div>
 
                 <div className="space-y-4">
@@ -1463,6 +1638,50 @@ export default function Admin() {
                 </button>
               </div>
 
+              {/* 0. AKCIÓK ÉS PROMÓCIÓK */}
+              <div className="bg-gradient-to-br from-amber-50 to-orange-50 p-6 rounded-2xl shadow-sm border border-amber-200 space-y-6">
+                <h2 className="text-xl font-bold text-amber-900 flex items-center gap-2">
+                  <Calculator className="w-6 h-6 text-amber-600" /> Aktív Akciók és Promóciók
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {['fuvagas', 'locsolas', 'soveny'].map(id => {
+                    const promo = calculatorSettings.promotions?.[id] || { isActive: false, type: 'percent', value: 0, message: '' };
+                    const updatePromo = (key: string, val: any) => {
+                      setCalculatorSettings(prev => ({
+                        ...prev,
+                        promotions: {
+                          ...(prev.promotions || {}),
+                          [id]: { ...promo, [key]: val }
+                        }
+                      }));
+                    };
+
+                    return (
+                      <div key={id} className={`p-4 rounded-xl border-2 transition-all ${promo.isActive ? 'bg-white border-amber-400 shadow-md' : 'bg-stone-50/50 border-stone-200 opacity-70'}`}>
+                        <div className="flex items-center justify-between mb-4">
+                          <span className="font-bold text-stone-800 uppercase text-sm">{id === 'fuvagas' ? 'Fűvágás' : id === 'locsolas' ? 'Locsolás' : 'Sövény'}</span>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" className="sr-only peer" checked={promo.isActive} onChange={e => updatePromo('isActive', e.target.checked)} />
+                            <div className="w-9 h-5 bg-stone-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-stone-400 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500"></div>
+                          </label>
+                        </div>
+                        
+                        <div className="space-y-3">
+                          <input 
+                            disabled={!promo.isActive}
+                            type="text" 
+                            placeholder="Akciós üzenet (pl. Tavaszi akció!)"
+                            value={promo.message} 
+                            onChange={e => updatePromo('message', e.target.value)}
+                            className="w-full text-xs border border-stone-200 rounded px-2 py-2 outline-none focus:ring-2 focus:ring-amber-500 italic bg-white"
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
               {/* 1. SZOLGÁLTATÁSOK ALAPÁRAI */}
               <div className="grid md:grid-cols-2 gap-8">
                 {/* Traktoros fűnyírás */}
@@ -1572,6 +1791,48 @@ export default function Admin() {
                   </div>
                 </div>
 
+                {/* Fűnyírási Logika Szabályok */}
+                <div className="md:col-span-2 bg-gradient-to-br from-emerald-50 to-teal-50 p-6 rounded-2xl shadow-sm border border-emerald-100 space-y-6">
+                  <h2 className="text-xl font-bold text-emerald-900 flex items-center gap-2">
+                    <Tractor className="w-6 h-6 text-emerald-600" /> Fűnyírási Logika és Szabályok
+                  </h2>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <div className="bg-white/60 p-4 rounded-xl border border-white space-y-4">
+                      <div>
+                        <label className="block text-sm font-bold text-stone-700 mb-1">Tologatós m² korlát</label>
+                        <p className="text-xs text-stone-500 mb-3">Maximális terület, amíg a tologatós fűnyíró még választható opció.</p>
+                        <div className="flex items-center gap-2">
+                          <input 
+                            type="number" 
+                            value={calculatorSettings.tologatosMaxArea || 2500}
+                            onChange={(e) => handleCalculatorSettingChange('tologatosMaxArea', Number(e.target.value))}
+                            className="w-full px-4 py-3 rounded-xl border border-stone-200 focus:ring-2 focus:ring-emerald-500 outline-none transition-all text-stone-900 bg-white" 
+                          />
+                          <span className="text-sm font-bold text-stone-400">m²</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="bg-white/60 p-4 rounded-xl border border-white space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <label className="block text-sm font-bold text-stone-700">Kötelező tologatós (Tagolt terep)</label>
+                          <p className="text-xs text-stone-500 mt-1">"Nagyon tagolt" terep esetén tiltsa le a traktort.</p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input 
+                            type="checkbox" 
+                            className="sr-only peer" 
+                            checked={calculatorSettings.forceTologatosOnVerySegmented ?? true} 
+                            onChange={(e) => handleCalculatorSettingChange('forceTologatosOnVerySegmented', e.target.checked)} 
+                          />
+                          <div className="w-11 h-6 bg-stone-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-stone-400 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Sövénynyírás */}
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-stone-200 space-y-4 flex flex-col">
                   <h2 className="text-xl font-semibold text-stone-800 border-b border-stone-100 pb-4 flex items-center gap-2">
@@ -1672,35 +1933,64 @@ export default function Admin() {
                 {/* Szorzók */}
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-stone-200 space-y-4">
                   <h2 className="text-xl font-semibold text-stone-800 border-b border-stone-100 pb-4 flex items-center gap-2">
-                    <AlertCircle className="w-5 h-5 text-emerald-600" /> Szorzók és Kedvezmények
+                    <AlertCircle className="w-5 h-5 text-emerald-600" /> Szorzók és Gyakorisági Kedvezmények
                   </h2>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-stone-700 mb-1">Kevés akadály (%)</label>
-                      <input type="number" step="1" value={calculatorSettings.surchargeObstacleFew ?? 20}
-                        onChange={(e) => handleCalculatorSettingChange('surchargeObstacleFew', Number(e.target.value))}
-                        className="w-full px-4 py-2 rounded-xl border border-stone-200 focus:ring-2 focus:ring-emerald-500 outline-none text-sm" />
+                  <div className="space-y-6">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-stone-700 mb-1">Kevés akadály (%)</label>
+                        <input type="number" step="1" value={calculatorSettings.surchargeObstacleFew ?? 20}
+                          onChange={(e) => handleCalculatorSettingChange('surchargeObstacleFew', Number(e.target.value))}
+                          className="w-full px-4 py-2 rounded-xl border border-stone-200 focus:ring-2 focus:ring-emerald-500 outline-none text-sm" />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-stone-700 mb-1">Sok akadály (%)</label>
+                        <input type="number" step="1" value={calculatorSettings.surchargeObstacleMany ?? 40}
+                          onChange={(e) => handleCalculatorSettingChange('surchargeObstacleMany', Number(e.target.value))}
+                          className="w-full px-4 py-2 rounded-xl border border-stone-200 focus:ring-2 focus:ring-emerald-500 outline-none text-sm" />
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-stone-700 mb-1">Sok akadály (%)</label>
-                      <input type="number" step="1" value={calculatorSettings.surchargeObstacleMany ?? 40}
-                        onChange={(e) => handleCalculatorSettingChange('surchargeObstacleMany', Number(e.target.value))}
-                        className="w-full px-4 py-2 rounded-xl border border-stone-200 focus:ring-2 focus:ring-emerald-500 outline-none text-sm" />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-stone-700 mb-1">Havi 1x (%)</label>
-                      <input type="number" value={calculatorSettings.discountRegularPercent ?? 10}
-                        onChange={(e) => handleCalculatorSettingChange('discountRegularPercent', Number(e.target.value))}
-                        className="w-full px-4 py-2 rounded-xl border border-stone-200 text-sm" />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-stone-700 mb-1">Havi többszöri (%)</label>
-                      <input type="number" value={calculatorSettings.discountFrequentPercent ?? 15}
-                        onChange={(e) => handleCalculatorSettingChange('discountFrequentPercent', Number(e.target.value))}
-                        className="w-full px-4 py-2 rounded-xl border border-stone-200 text-sm" />
+
+                    <div className="pt-4 border-t border-stone-100 space-y-4">
+                      <p className="text-xs font-bold text-stone-400 uppercase">Gyakorisági Kedvezmények</p>
+                      
+                      {['monthly1', 'monthlyMore'].map(key => {
+                        const label = key === 'monthly1' ? 'Havi 1 alkalom' : 'Havi többszöri';
+                        const config = calculatorSettings.frequencyDiscountSettings?.[key as 'monthly1' | 'monthlyMore'] || { type: 'percent', value: 0 };
+                        
+                        const updateFreq = (field: string, val: any) => {
+                          setCalculatorSettings(prev => ({
+                            ...prev,
+                            frequencyDiscountSettings: {
+                              ...(prev.frequencyDiscountSettings || { monthly1: { type: 'percent', value: 10 }, monthlyMore: { type: 'percent', value: 15 } }),
+                              [key]: { ...config, [field]: val }
+                            }
+                          }));
+                        };
+
+                        return (
+                          <div key={key} className="flex items-center gap-4 bg-stone-50 p-3 rounded-xl border border-stone-100">
+                            <span className="text-sm font-medium text-stone-700 flex-1">{label}</span>
+                            <select 
+                              value={config.type} 
+                              onChange={e => updateFreq('type', e.target.value)}
+                              className="text-xs border border-stone-200 rounded px-2 py-1.5 bg-white outline-none"
+                            >
+                              <option value="percent">Kedvezmény (%)</option>
+                              <option value="fixed">Fix ár (Ft/m²)</option>
+                            </select>
+                            <input 
+                              type="number" 
+                              value={config.value} 
+                              onChange={e => updateFreq('value', Number(e.target.value))}
+                              className="w-20 text-sm font-bold border border-stone-200 rounded px-3 py-1.5 outline-none text-right"
+                            />
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
-                  <div className="pt-2 border-t border-stone-100 flex flex-col gap-2">
+                  <div className="pt-4 border-t border-stone-100 flex flex-col gap-2">
                     <div>
                       <label className="block text-sm font-medium text-stone-700 mb-1">Magas fű szorzó (pl. 2 = dupla ár)</label>
                       <input type="number" step="0.1" value={calculatorSettings.multiplierHighGrass ?? 2}

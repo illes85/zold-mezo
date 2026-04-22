@@ -229,9 +229,20 @@ export default function App() {
           body: formData
         });
 
-        if (!response.ok) throw new Error('Hiba történt a képfeltöltés során');
+        const text = await response.text();
+        let result;
+        try {
+          result = JSON.parse(text);
+        } catch (e) {
+          console.warn("PHP response is not valid JSON. Likely running in Dev mode without PHP support.", text);
+          if (import.meta.env.DEV) {
+            // Mock success in dev mode
+            result = { success: true, url: URL.createObjectURL(file) };
+          } else {
+            throw new Error('Érvénytelen válasz a szervertől a képfeltöltés során.');
+          }
+        }
 
-        const result = await response.json();
         if (result.success) {
           imageUrls.push({
             url: result.url,
@@ -263,7 +274,7 @@ export default function App() {
 
       // 3. Notify provider via mail.php
       try {
-        await fetch('/mail.php', {
+        const mailResponse = await fetch('/mail.php', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -278,6 +289,14 @@ export default function App() {
             secondaryEmail: siteSettings?.secondaryContactEmail
           })
         });
+        
+        // Handle potential non-json response in dev
+        const mailText = await mailResponse.text();
+        try {
+          JSON.parse(mailText);
+        } catch(e) {
+          console.warn("Mail PHP response is not JSON (likely dev mode).", mailText);
+        }
       } catch (err) {
         console.error("Email notification failed", err);
       }

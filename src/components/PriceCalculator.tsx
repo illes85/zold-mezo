@@ -98,8 +98,14 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
       });
     }
 
-    return opts;
-  }, [activeServices]);
+    return opts.map(opt => {
+      const promo = settings.promotions?.[opt.id];
+      return {
+        ...opt,
+        promo: (promo && promo.isActive) ? promo : null
+      };
+    });
+  }, [activeServices, settings.promotions]);
 
   const [serviceType, setServiceType] = useState<string>('fuvagas');
 
@@ -109,8 +115,11 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
     }
   }, [availableServices, serviceType]);
 
+  const promo = settings.promotions?.[serviceType];
+  const isPromoActive = promo && promo.isActive;
+
   // Alap paraméterek
-  const [areaSize, setAreaSize] = useState<number | ''>('');
+  const [areaSize, setAreaSize] = useState<string>('');
 
   // Terep tulajdonságok
   const [obstacles, setObstacles] = useState<'könnyű' | 'kevés' | 'sok'>('könnyű');
@@ -296,7 +305,24 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
     const surchargeMultiplier = 1 + (surchargePercent / 100);
 
     if (serviceType === 'fuvagas') {
-      const area = Number(areaSize);
+      const parseArea = (val: string) => {
+        if (!val) return 0;
+        // Strip spaces
+        let cleaned = val.replace(/\s/g, '');
+        // If there's a comma and a dot, dot is thousands
+        if (cleaned.includes(',') && cleaned.includes('.')) {
+          cleaned = cleaned.replace(/\./g, '').replace(/,/g, '.');
+        } else if (cleaned.includes('.') && /^\d+\.\d{3}$/.test(cleaned)) {
+          // If only one dot and it's followed by 3 digits, likely thousands separator
+          cleaned = cleaned.replace(/\./g, '');
+        } else {
+          // Otherwise standard replace comma to dot
+          cleaned = cleaned.replace(/,/g, '.');
+        }
+        return Number(cleaned) || 0;
+      };
+
+      const area = parseArea(areaSize);
       if (!area || area <= 0) { setEstimatedPrice(null); return; }
 
       let grassMultiplier = grassHeight === 'magas' ? (settings.multiplierHighGrass || 2) : 1;
@@ -309,12 +335,20 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
         // Find the first tier where area <= limit, OR the first tier where limit === -1 (infinity)
         const matchedTier = tiers.find(t => t.limit === -1 || area <= t.limit);
         if (matchedTier) matchingPrice = matchedTier.price;
-        else matchingPrice = tiers[tiers.length - 1].price; // fallback to last tier
+        else matchingPrice = tiers[tiers.length - 1]?.price || defaultPrice; // fallback to last tier
         return matchingPrice;
       };
 
       let tologBase = getTierPrice(settings.tologatosPriceTiers, 45);
       let trakBase = getTierPrice(settings.traktorPriceTiers, 10);
+
+      if (frequency === 'havi_egy' && settings.frequencyDiscountSettings?.monthly1?.type === 'fixed') {
+        tologBase = settings.frequencyDiscountSettings.monthly1.value;
+        trakBase = settings.frequencyDiscountSettings.monthly1.value;
+      } else if (frequency === 'havi_tobb' && settings.frequencyDiscountSettings?.monthlyMore?.type === 'fixed') {
+        tologBase = settings.frequencyDiscountSettings.monthlyMore.value;
+        trakBase = settings.frequencyDiscountSettings.monthlyMore.value;
+      }
 
       const tologatosPrice = area * tologBase * surchargeMultiplier * grassMultiplier;
       const tologatosMin = settings.tologatosMinPrice || 15000;
@@ -325,8 +359,9 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
       const finalTraktorPrice = Math.max(traktorPrice, traktorMin);
 
       // Döntés a gépről
-      const isTraktorExcluded = segmentation === 'nagyon' || obstacles === 'sok';
-      const isTologatosExcluded = grassHeight === 'magas'; // Tologatós nem bírja a magas füvet
+      const isTraktorExcluded = (segmentation === 'nagyon' && (settings.forceTologatosOnVerySegmented ?? true)) || obstacles === 'sok';
+      // Ha nagyon tagolt, a tologatós akkor is engedélyezett, ha túllépi a területkorlátot
+      const isTologatosExcluded = grassHeight === 'magas' || (area > (settings.tologatosMaxArea ?? 2500) && segmentation !== 'nagyon'); 
 
       if (isTraktorExcluded && isTologatosExcluded) {
         // Mindkettő kizárva! Ebben az esetben nem lehet árat mondani, mert fűkasza kellene vagy spec egyeztetés
@@ -374,14 +409,34 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
       if (!hl || !hh || hl <= 0 || hh <= 0) { setEstimatedPrice(null); return; }
       const hw = Number(hedgeWidth) || 1;
       const volume = hl * hh * hw;
-      actPrice = volume * (settings.hedgeTrimmingBasePrice || 800) * surchargeMultiplier;
+      
+      let baseSovenyPrice = settings.hedgeTrimmingBasePrice || 800;
+      if (frequency === 'havi_egy' && settings.frequencyDiscountSettings?.monthly1?.type === 'fixed') {
+        baseSovenyPrice = settings.frequencyDiscountSettings.monthly1.value;
+      } else if (frequency === 'havi_tobb' && settings.frequencyDiscountSettings?.monthlyMore?.type === 'fixed') {
+        baseSovenyPrice = settings.frequencyDiscountSettings.monthlyMore.value;
+      }
+
+      actPrice = volume * baseSovenyPrice * surchargeMultiplier;
       actMinPrice = settings.hedgeTrimmingMinPrice || 15000;
-      calculatedUnitPrice = hh * hw * (settings.hedgeTrimmingBasePrice || 800) * surchargeMultiplier;
+      calculatedUnitPrice = hh * hw * baseSovenyPrice * surchargeMultiplier;
     }
 
     // Frekvencia kedvezmény
-    if (frequency === 'havi_egy') actPrice *= (1 - (settings.discountRegularPercent || 10) / 100);
-    else if (frequency === 'havi_tobb') actPrice *= (1 - (settings.discountFrequentPercent || 15) / 100);
+    const freqConfig1 = settings.frequencyDiscountSettings?.monthly1 || { type: 'percent', value: settings.discountRegularPercent || 10 };
+    const freqConfigMore = settings.frequencyDiscountSettings?.monthlyMore || { type: 'percent', value: settings.discountFrequentPercent || 15 };
+
+    if (frequency === 'havi_egy') {
+      if (freqConfig1.type === 'percent') {
+        actPrice *= (1 - freqConfig1.value / 100);
+      } 
+      // Fixed price is already handled in base prices
+    } else if (frequency === 'havi_tobb') {
+      if (freqConfigMore.type === 'percent') {
+        actPrice *= (1 - freqConfigMore.value / 100);
+      }
+      // Fixed price is already handled in base prices
+    }
 
     // Belső fix ktg
     const internalCostsTotal = (settings.serviceCosts?.[serviceType] || [])
@@ -447,8 +502,7 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
   }, [calculatePrice]);
 
   const getDetails = () => ({
-    serviceType, areaSize, obstacles, segmentation, slope, grassHeight, frequency,
-    locationType, distanceKm, offsetSurcharge: dispatchSurcharge
+    locationType, distanceKm, offsetSurcharge: dispatchSurcharge, promotion: isPromoActive ? promo : null
   });
 
   const OptionButton = ({
@@ -480,6 +534,45 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
     </button>
   );
 
+  const ServiceOptionButton = ({
+    active, onClick, label, icon, promo
+  }: {
+    active: boolean, onClick: () => void, label: string, icon?: React.ReactNode, promo?: any
+  }) => (
+    <button
+      onClick={onClick}
+      className={`relative flex items-center justify-center flex-col gap-1.5 md:gap-2 p-2.5 sm:p-4 rounded-2xl border-2 transition-all ${active
+          ? 'border-emerald-600 bg-emerald-50/50 text-emerald-900 shadow-sm ring-1 ring-emerald-600 ring-offset-1'
+          : 'border-stone-200 bg-white text-stone-600 hover:border-emerald-400 hover:bg-stone-50/50'
+        }`}
+    >
+      {active && (
+        <div className="absolute top-2 right-2 flex items-center justify-center bg-emerald-500 text-white rounded-full p-0.5">
+          <Check className="w-3 h-3" />
+        </div>
+      )}
+      {promo && (
+        <div className="absolute -top-2 -left-2 z-10">
+          <motion.div 
+            initial={{ scale: 0.8, rotate: -5 }} animate={{ scale: 1, rotate: -10 }}
+            className="bg-amber-500 text-white text-[10px] font-black px-2 py-1 rounded shadow-lg border border-white"
+          >
+            AKCIÓ!
+          </motion.div>
+        </div>
+      )}
+      {icon && (
+        <div className={`${active ? 'text-emerald-600 icon-emerald' : 'text-stone-400 icon-stone'} transition-all duration-300 [&_img]:w-14 [&_img]:h-14`}>
+          {icon}
+        </div>
+      )}
+      <div className="text-center w-full">
+        <span className="block font-semibold text-sm leading-tight text-center">{label}</span>
+        {promo?.message && <span className="block text-[10px] mt-1 text-amber-600 font-bold leading-none animate-pulse">{promo.message}</span>}
+      </div>
+    </button>
+  );
+
   return (
     <div className="max-w-4xl mx-auto space-y-6 md:space-y-8 bg-white min-h-[600px] rounded-3xl p-0 sm:p-4 md:p-8 sm:shadow-sm sm:border border-stone-200">
 
@@ -491,7 +584,7 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
         </h3>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
           {availableServices.map(s => (
-            <OptionButton
+            <ServiceOptionButton
               key={s.id}
               active={serviceType === s.id}
               onClick={() => {
@@ -500,6 +593,7 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
               }}
               label={s.label}
               icon={s.icon}
+              promo={s.promo}
             />
           ))}
         </div>
@@ -519,16 +613,20 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
               <label className="block text-sm font-medium text-stone-700 mb-2">Terület mérete (m²)</label>
               <div className="relative">
                 <input
-                  type="number" min="1" placeholder="pl. 1200"
+                  type="text" placeholder="pl. 1.200"
                   value={areaSize}
-                  onChange={(e) => setAreaSize(e.target.value ? Number(e.target.value) : '')}
+                  onChange={(e) => setAreaSize(e.target.value)}
                   className="w-full text-lg md:text-xl font-bold px-3 py-3 sm:px-4 sm:py-4 rounded-xl border border-stone-200 pr-12 sm:pr-16 focus:ring-4 focus:ring-emerald-500/20 focus:border-emerald-500 outline-none transition-all shadow-sm"
                 />
                 <span className="absolute right-4 top-1/2 -translate-y-1/2 text-stone-400 font-medium">m²</span>
               </div>
-              {typeof areaSize === 'number' && areaSize >= 10000 && (
-                <p className="text-xs text-stone-500 mt-2 flex items-center gap-1"><InfoIcon /> ≈ {(areaSize / 10000).toLocaleString('hu-HU', { maximumFractionDigits: 2 })} hektár</p>
-              )}
+              {(() => {
+                const numericArea = Number(areaSize.replace(/\s/g, '').replace(/\.(?=\d{3}$)/g, '').replace(/,/g, '.'));
+                if (numericArea >= 10000) {
+                  return <p className="text-xs text-stone-500 mt-2 flex items-center gap-1"><InfoIcon /> ≈ {(numericArea / 10000).toLocaleString('hu-HU', { maximumFractionDigits: 2 })} hektár</p>;
+                }
+                return null;
+              })()}
             </div>
           </div>
         )}
@@ -643,9 +741,27 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
             Milyen gyakran lenne szükség a munkára?
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2 sm:gap-3">
-            <OptionButton active={frequency === 'egyszeri'} onClick={() => setFrequency('egyszeri')} label="Egyszeri alkalom" subLabel="Nincs kedvezmény" />
-            <OptionButton active={frequency === 'havi_egy'} onClick={() => setFrequency('havi_egy')} label="Havi 1 alkalom" subLabel={`-${settings.discountRegularPercent ?? 10}% kedvezmény`} />
-            <OptionButton active={frequency === 'havi_tobb'} onClick={() => setFrequency('havi_tobb')} label="Havi többször" subLabel={`-${settings.discountFrequentPercent ?? 15}% kedvezmény`} />
+            <OptionButton active={frequency === 'egyszeri'} onClick={() => setFrequency('egyszeri')} label="Egyszeri alkalom" />
+            <OptionButton 
+              active={frequency === 'havi_egy'} 
+              onClick={() => setFrequency('havi_egy')} 
+              label="Havi 1 alkalom" 
+              subLabel={
+                (settings.frequencyDiscountSettings?.monthly1?.type === 'fixed') 
+                  ? `${settings.frequencyDiscountSettings.monthly1.value} Ft/m²` 
+                  : `-${settings.frequencyDiscountSettings?.monthly1?.value || settings.discountRegularPercent || 10}% kedvezmény`
+              } 
+            />
+            <OptionButton 
+              active={frequency === 'havi_tobb'} 
+              onClick={() => setFrequency('havi_tobb')} 
+              label="Havi többször" 
+              subLabel={
+                (settings.frequencyDiscountSettings?.monthlyMore?.type === 'fixed') 
+                  ? `${settings.frequencyDiscountSettings.monthlyMore.value} Ft/m²` 
+                  : `-${settings.frequencyDiscountSettings?.monthlyMore?.value || settings.discountFrequentPercent || 15}% kedvezmény`
+              } 
+            />
           </div>
         </div>
       )}
@@ -754,8 +870,13 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
           </div>
           <div className="relative z-10 w-full">
             <p className="text-emerald-50 text-sm font-medium mb-2 uppercase tracking-widest opacity-80">Indikátoros Kalkulált Ár</p>
-            <div className="text-3xl md:text-5xl font-display font-extrabold mb-2 tracking-tight">
-              ~ {estimatedPrice.toLocaleString('hu-HU')} Ft
+            <div className="text-3xl md:text-5xl font-display font-extrabold mb-2 tracking-tight flex flex-col items-center">
+              <span>~ {estimatedPrice.toLocaleString('hu-HU')} Ft</span>
+              {isPromoActive && promo.message && (
+                <span className="text-xs md:text-sm bg-white/20 px-3 py-1 rounded-full mt-2 font-bold animate-pulse">
+                  {promo.message}
+                </span>
+              )}
             </div>
             {settings.showUnitPricePerService?.[serviceType] && unitPrice && (
               <p className="text-emerald-100 font-medium mb-3">~ {unitPrice.toLocaleString('hu-HU', { minimumFractionDigits: 0, maximumFractionDigits: 1 })} {unitLabel(serviceType, wateringType)}</p>
@@ -766,12 +887,18 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center justify-center gap-2 text-xs md:text-sm bg-emerald-700/50 py-2 px-4 rounded-full backdrop-blur-sm">
                     {usedMachine === 'traktor' ? <Car className="w-4 h-4" /> : <HardHat className="w-4 h-4" />}
-                    <span>A terület nagysága és tagoltsága alapján a rendszert <strong>{usedMachine === 'traktor' ? 'traktoros' : 'tologatós fűnyíró'}</strong> díjszabással kalkulált.</span>
+                    <span>A terület nagysága és tagoltsága alapján a rendszer <strong>{usedMachine === 'traktor' ? 'traktoros' : 'tologatós fűnyíró'}</strong> díjszabással kalkulált.</span>
                   </div>
+                  {segmentation === 'nagyon' && usedMachine === 'tologatos' && (settings.forceTologatosOnVerySegmented ?? true) && (
+                    <div className="flex items-center justify-center gap-2 text-xs md:text-sm bg-emerald-700/30 text-emerald-100 py-2 px-4 rounded-full backdrop-blur-sm border border-emerald-500/20 italic">
+                      <HardHat className="w-4 h-4" />
+                      <span>Nagyon tagolt terep miatt ezt a területet csak <strong>tologatós fűnyíróval</strong> tudjuk vállalni.</span>
+                    </div>
+                  )}
                   {grassHeight === 'magas' && settings.showDoubleCutText !== false && (
                     <div className="flex items-center justify-center gap-2 text-xs md:text-sm bg-yellow-500/20 text-yellow-200 py-2 px-4 rounded-full backdrop-blur-sm border border-yellow-500/30">
                       <AlertCircle className="w-4 h-4" />
-                      <span>Elhanyagolt, magas fű esetén a területen <strong>dupla vágás</strong> (oda-vissza vágás) szükséges.</span>
+                      <span>Elhanyagolt, magas fű esetén a területen <strong>dupla vágás szükséges</strong>, az ár viszont általában csak kisebb mértékben emelkedik.</span>
                     </div>
                   )}
                 </div>
