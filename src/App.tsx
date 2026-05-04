@@ -35,6 +35,8 @@ const iconMap: Record<string, any> = {
   Droplets: <Droplets className="w-8 h-8 text-emerald-500" />
 };
 
+import { trackEvent } from './services/AnalyticsService';
+
 export default function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);
@@ -43,6 +45,11 @@ export default function App() {
   const [siteSettings, setSiteSettings] = useState<SiteSettings | null>(null);
   const [services, setServices] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Track page view
+  useEffect(() => {
+    trackEvent('page_view');
+  }, []);
 
   // Calculator state
   const [calculatedPrice, setCalculatedPrice] = useState<number | null>(null);
@@ -271,6 +278,9 @@ export default function App() {
       };
 
       await addDoc(collection(db, 'quotes'), quoteData);
+      
+      // Track analytics
+      trackEvent('form_submit', { quoteId: quoteId, serviceType: quoteData.serviceType });
 
       // 3. Notify provider via mail.php
       try {

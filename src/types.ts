@@ -149,7 +149,9 @@ export interface CalculatorSettings {
 
   // Fűnyírási logika szabályok
   tologatosMaxArea?: number;           // Alapérték: 2500
-  forceTologatosOnVerySegmented?: boolean; // Nagyon tagolt terep → tologatós
+  excludeTraktorOnVerySegmented?: boolean; // Nagyon tagolt terep → traktor tiltása
+  excludeTraktorOnManyObstacles?: boolean; // Sok akadály → traktor tiltása
+  excludeAllOnSteepSlope?: boolean;       // Meredek lejtő → minden eszköz tiltása
 }
 
 export const defaultCalculatorSettings: CalculatorSettings = {
@@ -223,7 +225,9 @@ export const defaultCalculatorSettings: CalculatorSettings = {
   prohibitedOptions: {},
   serviceCosts: {},
   tologatosMaxArea: 2500,
-  forceTologatosOnVerySegmented: true,
+  excludeTraktorOnVerySegmented: true,
+  excludeTraktorOnManyObstacles: true,
+  excludeAllOnSteepSlope: true,
 };
 
 export const defaultSettings: SiteSettings = {

@@ -4,10 +4,236 @@ import { db, auth, googleProvider, handleFirestoreError, OperationType } from '.
 import { signInWithPopup, signOut } from 'firebase/auth';
 import { collection, updateDoc, doc, query, orderBy, onSnapshot, serverTimestamp, getDoc, setDoc, getDocs, deleteDoc } from 'firebase/firestore';
 import { motion } from 'motion/react';
-import { Settings, Save, LogOut, LayoutDashboard, List, FileText, Check, X, AlertCircle, Calculator, Plus, Trash2, UploadCloud, ChevronUp, ChevronDown, Axe, Car, HardHat, Droplets, Scissors, MapPin, Mail, Phone, Calendar, Tractor } from 'lucide-react';
+import { Settings, Save, LogOut, LayoutDashboard, List, FileText, Check, X, AlertCircle, Calculator, Plus, Trash2, UploadCloud, ChevronUp, ChevronDown, Axe, Car, HardHat, Droplets, Scissors, MapPin, Mail, Phone, Calendar, Tractor, BarChart3, CheckCircle2 } from 'lucide-react';
 import { CalculatorSettings, defaultCalculatorSettings, SectionBlock, CustomBlock, QuoteRequest, QuoteImage } from './types';
 import { v4 as uuidv4 } from 'uuid';
 import ImageCropperModal from './components/ImageCropperModal';
+
+const StatCard = ({ title, value, icon, color = "emerald" }: { title: string, value: string | number, icon: React.ReactNode, color?: string }) => (
+  <div className="bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
+    <div className="flex items-center justify-between mb-4">
+      <div className={`p-3 rounded-xl bg-${color}-50 text-${color}-600`}>
+        {icon}
+      </div>
+    </div>
+    <p className="text-sm font-medium text-stone-500 mb-1">{title}</p>
+    <h4 className="text-2xl font-bold text-stone-900">{value}</h4>
+  </div>
+);
+
+const StatisticsDashboard = ({ quotes, analytics, dailyStats, hasPermission = true }: { quotes: QuoteRequest[], analytics: any[], dailyStats: any[], hasPermission?: boolean }) => {
+  // Calculated metrics
+  const totalQuotes = quotes.length;
+  const completedQuotes = quotes.filter(q => q.status === 'completed').length;
+  const acceptedQuotes = quotes.filter(q => q.status === 'accepted').length;
+  const totalRevenue = quotes
+    .filter(q => q.status === 'completed' || q.status === 'accepted')
+    .reduce((sum, q) => sum + (q.calculatedPrice || 0), 0);
+  
+  const conversionRate = totalQuotes > 0 ? ((completedQuotes + acceptedQuotes) / totalQuotes * 100).toFixed(1) : 0;
+
+  const totalPageViews = dailyStats.reduce((sum, s) => sum + (s.page_views || 0), 0);
+  const totalInteractions = dailyStats.reduce((sum, s) => sum + (s.calculator_interactions || 0), 0);
+
+  // Status breakdown
+  const statusCounts = {
+    pending: quotes.filter(q => q.status === 'pending').length,
+    accepted: acceptedQuotes,
+    completed: completedQuotes,
+    rejected: quotes.filter(q => q.status === 'rejected').length,
+  };
+
+  // Service breakdown
+  const serviceCounts: Record<string, number> = {};
+  quotes.forEach(q => {
+    const s = q.serviceType || 'Ismeretlen';
+    serviceCounts[s] = (serviceCounts[s] || 0) + 1;
+  });
+
+  // Top settlements
+  const settlements: Record<string, number> = {};
+  quotes.forEach(q => {
+    if (q.details?.settlement) {
+      settlements[q.details.settlement] = (settlements[q.details.settlement] || 0) + 1;
+    }
+  });
+  const topSettlements = Object.entries(settlements)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+
+  return (
+    <div className="space-y-8">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
+        <div>
+          <h1 className="text-3xl font-bold text-stone-900 mb-2">Statisztika és Elemzés</h1>
+          <p className="text-stone-600">Az oldal forgalmának és az ajánlatkéréseknek a nyomon követése.</p>
+        </div>
+        {!hasPermission && (
+          <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl flex items-start gap-3 max-w-md">
+            <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-800 leading-relaxed">
+              <p className="font-bold mb-1">Hiányzó jogosultságok</p>
+              <p>A látogatottsági adatok megjelenítéséhez frissítened kell a Firestore Security Rules-t a Firebase Console-ban.</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Main KPIs */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <StatCard title="Összes Ajánlatkérés" value={totalQuotes} icon={<FileText className="w-6 h-6" />} color="blue" />
+        <StatCard title="Várható Bevétel" value={`${totalRevenue.toLocaleString()} Ft`} icon={<Car className="w-6 h-6" />} color="emerald" />
+        <StatCard title="Konverziós Arány" value={`${conversionRate}%`} icon={<BarChart3 className="w-6 h-6" />} color="amber" />
+        <StatCard title="Összes Oldalmegtekintés" value={totalPageViews} icon={<LayoutDashboard className="w-6 h-6" />} color="indigo" />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Status Distribution */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
+          <h3 className="text-lg font-bold text-stone-800 mb-6 flex items-center gap-2">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600" /> Ajánlatok állapota
+          </h3>
+          <div className="space-y-4">
+            {Object.entries(statusCounts).map(([status, count]) => {
+              const labels: any = { pending: 'Új', accepted: 'Elfogadva', completed: 'Kész', rejected: 'Elutasítva' };
+              const colors: any = { pending: 'bg-blue-500', accepted: 'bg-amber-500', completed: 'bg-emerald-500', rejected: 'bg-red-500' };
+              const percent = totalQuotes > 0 ? (count / totalQuotes * 100) : 0;
+              return (
+                <div key={status}>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="font-medium text-stone-700">{labels[status]}</span>
+                    <span className="text-stone-500">{count} db ({percent.toFixed(0)}%)</span>
+                  </div>
+                  <div className="w-full h-2 bg-stone-100 rounded-full overflow-hidden">
+                    <div className={`h-full ${colors[status]}`} style={{ width: `${percent}%` }}></div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Top Services */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
+          <h3 className="text-lg font-bold text-stone-800 mb-6 flex items-center gap-2">
+            <List className="w-5 h-5 text-emerald-600" /> Népszerű szolgáltatások
+          </h3>
+          <div className="space-y-4">
+            {Object.entries(serviceCounts).sort((a,b) => b[1] - a[1]).map(([service, count]) => {
+              const percent = totalQuotes > 0 ? (count / totalQuotes * 100) : 0;
+              return (
+                <div key={service}>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="font-medium text-stone-700">{service}</span>
+                    <span className="text-stone-500">{count} db</span>
+                  </div>
+                  <div className="w-full h-2 bg-stone-100 rounded-full overflow-hidden">
+                    <div className="h-full bg-emerald-500" style={{ width: `${percent}%` }}></div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Geographical Distribution */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
+          <h3 className="text-lg font-bold text-stone-800 mb-6 flex items-center gap-2">
+            <MapPin className="w-5 h-5 text-emerald-600" /> Top 5 Település
+          </h3>
+          <div className="space-y-4">
+            {topSettlements.map(([city, count]) => {
+              const percent = totalQuotes > 0 ? (count / totalQuotes * 100) : 0;
+              return (
+                <div key={city}>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="font-medium text-stone-700">{city}</span>
+                    <span className="text-stone-500">{count} db</span>
+                  </div>
+                  <div className="w-full h-2 bg-stone-100 rounded-full overflow-hidden">
+                    <div className="h-full bg-blue-500" style={{ width: `${percent}%` }}></div>
+                  </div>
+                </div>
+              );
+            })}
+            {topSettlements.length === 0 && <p className="text-stone-400 italic text-sm">Még nincs település adat.</p>}
+          </div>
+        </div>
+
+        {/* Funnel / User Behavior */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
+          <h3 className="text-lg font-bold text-stone-800 mb-6 flex items-center gap-2">
+            <Tractor className="w-5 h-5 text-emerald-600" /> Felhasználói útvonal
+          </h3>
+          <div className="space-y-6">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-full bg-stone-100 flex items-center justify-center text-stone-500 font-bold">1</div>
+              <div className="flex-1">
+                <p className="text-sm font-bold text-stone-800">Látogatás</p>
+                <p className="text-xs text-stone-500">{totalPageViews} megtekintés</p>
+              </div>
+            </div>
+            <div className="w-px h-8 bg-stone-200 ml-6"></div>
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-full bg-stone-100 flex items-center justify-center text-stone-500 font-bold">2</div>
+              <div className="flex-1">
+                <p className="text-sm font-bold text-stone-800">Kalkulátor használat</p>
+                <p className="text-xs text-stone-500">{totalInteractions} interakció ({totalPageViews > 0 ? (totalInteractions / totalPageViews * 100).toFixed(1) : 0}%)</p>
+              </div>
+            </div>
+            <div className="w-px h-8 bg-stone-200 ml-6"></div>
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 font-bold">3</div>
+              <div className="flex-1">
+                <p className="text-sm font-bold text-emerald-800">Ajánlatkérés</p>
+                <p className="text-xs text-emerald-600">{totalQuotes} sikeres beküldés ({totalPageViews > 0 ? (totalQuotes / totalPageViews * 100).toFixed(1) : 0}%)</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Recent Activity (Events) */}
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
+        <h3 className="text-lg font-bold text-stone-800 mb-6 flex items-center gap-2">
+          <Calendar className="w-5 h-5 text-emerald-600" /> Legutóbbi tevékenységek
+        </h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-stone-50 text-stone-500 font-medium border-b border-stone-200">
+              <tr>
+                <th className="px-4 py-3">Időpont</th>
+                <th className="px-4 py-3">Esemény</th>
+                <th className="px-4 py-3">Részletek</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stone-100">
+              {analytics.slice(0, 10).map((event) => (
+                <tr key={event.id} className="hover:bg-stone-50 transition-colors">
+                  <td className="px-4 py-3 whitespace-nowrap text-stone-500">
+                    {event.timestamp?.toDate().toLocaleString('hu-HU')}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase ${
+                      event.type === 'form_submit' ? 'bg-emerald-100 text-emerald-700' : 
+                      event.type === 'calculator_result' ? 'bg-blue-100 text-blue-700' :
+                      'bg-stone-100 text-stone-600'
+                    }`}>
+                      {event.type}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-stone-600 truncate max-w-xs">
+                    {JSON.stringify(event.details)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export default function Admin() {
   const { user, isAdmin, loading } = useAuth();
@@ -18,6 +244,9 @@ export default function Admin() {
   const [calculatorSettings, setCalculatorSettings] = useState<CalculatorSettings>(defaultCalculatorSettings);
   const [services, setServices] = useState<any[]>([]);
   const [quotes, setQuotes] = useState<QuoteRequest[]>([]);
+  const [analytics, setAnalytics] = useState<any[]>([]);
+  const [dailyStats, setDailyStats] = useState<any[]>([]);
+  const [hasStatsPermission, setHasStatsPermission] = useState(true);
   const pendingCount = quotes.filter(q => q.status === 'pending').length;
 
   // UI states
@@ -85,11 +314,43 @@ export default function Admin() {
         handleFirestoreError(error, OperationType.LIST, 'quotes');
       });
 
+      // Listen to analytics (limit to last 500 for performance)
+      const analyticsQ = query(collection(db, 'analytics'), orderBy('timestamp', 'desc'));
+      const analyticsUnsubscribe = onSnapshot(analyticsQ, (querySnapshot) => {
+        const analyticsData: any[] = [];
+        querySnapshot.forEach((doc) => {
+          analyticsData.push({ id: doc.id, ...doc.data() });
+        });
+        setAnalytics(analyticsData);
+      }, (error) => {
+        if (error.message?.includes('permission-denied') || error.message?.includes('Missing or insufficient permissions')) {
+          setHasStatsPermission(false);
+        }
+        handleFirestoreError(error, OperationType.LIST, 'analytics');
+      });
+
+      // Listen to daily stats
+      const statsQ = query(collection(db, 'stats'), orderBy('date', 'desc'));
+      const statsUnsubscribe = onSnapshot(statsQ, (querySnapshot) => {
+        const statsData: any[] = [];
+        querySnapshot.forEach((doc) => {
+          statsData.push({ id: doc.id, ...doc.data() });
+        });
+        setDailyStats(statsData);
+      }, (error) => {
+        if (error.message?.includes('permission-denied') || error.message?.includes('Missing or insufficient permissions')) {
+          setHasStatsPermission(false);
+        }
+        handleFirestoreError(error, OperationType.LIST, 'stats');
+      });
+
       return () => {
         settingsUnsubscribe();
         calcUnsubscribe();
         servicesUnsubscribe();
         quotesUnsubscribe();
+        analyticsUnsubscribe();
+        statsUnsubscribe();
       };
     }
   }, [isAdmin]);
@@ -1060,7 +1321,7 @@ export default function Admin() {
           </button>
           <button
             onClick={() => setActiveTab('quotes')}
-            className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-colors ${activeTab === 'quotes' ? 'bg-emerald-600 text-white' : 'text-stone-300 hover:bg-stone-800'}`}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'quotes' ? 'bg-emerald-600 text-white' : 'text-stone-300 hover:bg-stone-800'}`}
           >
             <div className="flex items-center gap-3">
               <FileText className="w-5 h-5" />
@@ -1071,6 +1332,13 @@ export default function Admin() {
                 {pendingCount}
               </span>
             )}
+          </button>
+          <button
+            onClick={() => setActiveTab('statistics')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${activeTab === 'statistics' ? 'bg-emerald-600 text-white' : 'text-stone-300 hover:bg-stone-800'}`}
+          >
+            <BarChart3 className="w-5 h-5" />
+            Statisztika
           </button>
         </nav>
         <div className="p-4 border-t border-stone-800">
@@ -1814,20 +2082,55 @@ export default function Admin() {
                     </div>
 
                     <div className="bg-white/60 p-4 rounded-xl border border-white space-y-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <label className="block text-sm font-bold text-stone-700">Kötelező tologatós (Tagolt terep)</label>
-                          <p className="text-xs text-stone-500 mt-1">"Nagyon tagolt" terep esetén tiltsa le a traktort.</p>
+                      <p className="text-sm font-bold text-stone-700 uppercase tracking-wider mb-2">Terepviszonyok szerinti traktor kizárás</p>
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <label className="block text-sm font-semibold text-stone-700">Nagyon tagolt terep</label>
+                            <p className="text-[10px] text-stone-500 italic">Alapértelmezetten tiltva</p>
+                          </div>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              className="sr-only peer" 
+                              checked={calculatorSettings.excludeTraktorOnVerySegmented ?? true} 
+                              onChange={(e) => handleCalculatorSettingChange('excludeTraktorOnVerySegmented', e.target.checked)} 
+                            />
+                            <div className="w-11 h-6 bg-stone-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-stone-400 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                          </label>
                         </div>
-                        <label className="relative inline-flex items-center cursor-pointer">
-                          <input 
-                            type="checkbox" 
-                            className="sr-only peer" 
-                            checked={calculatorSettings.forceTologatosOnVerySegmented ?? true} 
-                            onChange={(e) => handleCalculatorSettingChange('forceTologatosOnVerySegmented', e.target.checked)} 
-                          />
-                          <div className="w-11 h-6 bg-stone-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-stone-400 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
-                        </label>
+
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <label className="block text-sm font-semibold text-stone-700">Sok akadály</label>
+                            <p className="text-[10px] text-stone-500 italic">Alapértelmezetten tiltva</p>
+                          </div>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              className="sr-only peer" 
+                              checked={calculatorSettings.excludeTraktorOnManyObstacles ?? true} 
+                              onChange={(e) => handleCalculatorSettingChange('excludeTraktorOnManyObstacles', e.target.checked)} 
+                            />
+                            <div className="w-11 h-6 bg-stone-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-stone-400 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                          </label>
+                        </div>
+
+                        <div className="flex items-center justify-between pt-2 border-t border-stone-200">
+                          <div>
+                            <label className="block text-sm font-bold text-red-700">Meredek lejtő / Rézsű</label>
+                            <p className="text-[10px] text-red-500 font-medium italic">Kalkuláció teljes tiltása (Minden eszköz)</p>
+                          </div>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              className="sr-only peer" 
+                              checked={calculatorSettings.excludeAllOnSteepSlope ?? true} 
+                              onChange={(e) => handleCalculatorSettingChange('excludeAllOnSteepSlope', e.target.checked)} 
+                            />
+                            <div className="w-11 h-6 bg-stone-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-stone-400 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"></div>
+                          </label>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -2131,6 +2434,12 @@ export default function Admin() {
                   </div>
                 </div>
               </div>
+            </motion.div>
+          )}
+
+          {activeTab === 'statistics' && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+              <StatisticsDashboard quotes={quotes} analytics={analytics} dailyStats={dailyStats} />
             </motion.div>
           )}
         </div>

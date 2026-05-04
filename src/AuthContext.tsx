@@ -49,7 +49,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             });
             setIsAdmin(role === 'admin');
           } else {
-            setIsAdmin(userDoc.data()?.role === 'admin');
+            // Force update role if it's supposed to be admin but isn't in DB
+            const existingData = userDoc.data();
+            if (role === 'admin' && existingData?.role !== 'admin') {
+              await updateDoc(userDocRef, { role: 'admin' });
+              setIsAdmin(true);
+            } else {
+              setIsAdmin(existingData?.role === 'admin');
+            }
           }
           
           // Eltávolítva a jogosultsági hibák miatt (már nincs rá szükség a db-ben)

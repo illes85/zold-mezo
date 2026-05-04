@@ -5,6 +5,7 @@ import { db, handleFirestoreError, OperationType } from '../firebase';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { CalculatorSettings, defaultCalculatorSettings } from '../types';
 import { MapContainer, TileLayer, Polyline, Marker, useMap } from 'react-leaflet';
+import { trackEvent } from '../services/AnalyticsService';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -227,6 +228,7 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
   const [unitPrice, setUnitPrice] = useState<number | null>(null);
   const [usedMachine, setUsedMachine] = useState<'traktor' | 'tologatos' | null>(null);
   const [dispatchSurcharge, setDispatchSurcharge] = useState(0);
+  const [minPriceApplied, setMinPriceApplied] = useState(false);
 
   // Útvonaltervezés Geocoding + OSRM
   const calculateRoute = async (customAddr?: string, lat?: number, lon?: number) => {
@@ -283,17 +285,19 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
   };
 
   const calculatePrice = useCallback(() => {
-    if (slope === 'meredek') {
+    if (slope === 'meredek' && (settings.excludeAllOnSteepSlope ?? true)) {
       setEstimatedPrice(null);
       setUnitPrice(null);
       onCalculate(null, getDetails());
       return;
     }
 
+    // Results
     let actPrice = 0;
     let actMinPrice = 0;
     let calculatedUnitPrice: number | null = null;
     let currentUsedMachine: 'traktor' | 'tologatos' | null = null;
+    let minPriceApplied = false;
 
     let surchargePercent = 0;
     if (obstacles === 'kevés') surchargePercent += (settings.surchargeObstacleFew ?? 20);
@@ -307,16 +311,12 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
     if (serviceType === 'fuvagas') {
       const parseArea = (val: string) => {
         if (!val) return 0;
-        // Strip spaces
         let cleaned = val.replace(/\s/g, '');
-        // If there's a comma and a dot, dot is thousands
         if (cleaned.includes(',') && cleaned.includes('.')) {
           cleaned = cleaned.replace(/\./g, '').replace(/,/g, '.');
         } else if (cleaned.includes('.') && /^\d+\.\d{3}$/.test(cleaned)) {
-          // If only one dot and it's followed by 3 digits, likely thousands separator
           cleaned = cleaned.replace(/\./g, '');
         } else {
-          // Otherwise standard replace comma to dot
           cleaned = cleaned.replace(/,/g, '.');
         }
         return Number(cleaned) || 0;
@@ -327,15 +327,12 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
 
       let grassMultiplier = grassHeight === 'magas' ? (settings.multiplierHighGrass || 2) : 1;
 
-      // 1) Find dynamic unit prices from Tiers
       const getTierPrice = (tiers: { limit: number, price: number }[] = [], defaultPrice: number) => {
         let matchingPrice = defaultPrice;
         if (!tiers || tiers.length === 0) return defaultPrice;
-
-        // Find the first tier where area <= limit, OR the first tier where limit === -1 (infinity)
         const matchedTier = tiers.find(t => t.limit === -1 || area <= t.limit);
         if (matchedTier) matchingPrice = matchedTier.price;
-        else matchingPrice = tiers[tiers.length - 1]?.price || defaultPrice; // fallback to last tier
+        else matchingPrice = tiers[tiers.length - 1]?.price || defaultPrice;
         return matchingPrice;
       };
 
@@ -359,12 +356,18 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
       const finalTraktorPrice = Math.max(traktorPrice, traktorMin);
 
       // Döntés a gépről
-      const isTraktorExcluded = (segmentation === 'nagyon' && (settings.forceTologatosOnVerySegmented ?? true)) || obstacles === 'sok';
-      // Ha nagyon tagolt, a tologatós akkor is engedélyezett, ha túllépi a területkorlátot
-      const isTologatosExcluded = grassHeight === 'magas' || (area > (settings.tologatosMaxArea ?? 2500) && segmentation !== 'nagyon'); 
+      const isTraktorExcluded = 
+        (segmentation === 'nagyon' && (settings.excludeTraktorOnVerySegmented ?? true)) || 
+        (obstacles === 'sok' && (settings.excludeTraktorOnManyObstacles ?? true)) ||
+        (slope === 'meredek' && (settings.excludeAllOnSteepSlope ?? true));
+
+      // A tologatós NINCS kizárva csak mert nagy a terület, HA a traktor ki van zárva akadályok miatt
+      const isTologatosExcluded = 
+        grassHeight === 'magas' || 
+        (area > (settings.tologatosMaxArea ?? 2500) && segmentation !== 'nagyon' && !isTraktorExcluded) ||
+        (slope === 'meredek' && (settings.excludeAllOnSteepSlope ?? true));
 
       if (isTraktorExcluded && isTologatosExcluded) {
-        // Mindkettő kizárva! Ebben az esetben nem lehet árat mondani, mert fűkasza kellene vagy spec egyeztetés
         setEstimatedPrice(null);
         return;
       }
@@ -430,12 +433,10 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
       if (freqConfig1.type === 'percent') {
         actPrice *= (1 - freqConfig1.value / 100);
       } 
-      // Fixed price is already handled in base prices
     } else if (frequency === 'havi_tobb') {
       if (freqConfigMore.type === 'percent') {
         actPrice *= (1 - freqConfigMore.value / 100);
       }
-      // Fixed price is already handled in base prices
     }
 
     // Belső fix ktg
@@ -451,7 +452,6 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
       const feeZone1 = settings.distanceLimit1FeePerKm ?? 400;
       const feeZone2 = settings.distanceLimit2FeePerKm ?? 300;
 
-      // 1. Zóna (0-30 km): Csak a minimumot növeli
       const zone1Dist = Math.min(distanceKm, zone1Limit);
       const billableZone1 = Math.max(0, zone1Dist - freeKm);
       if (billableZone1 > 0) {
@@ -460,7 +460,6 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
         dispatchFeeExtra += zone1MinRaise;
       }
 
-      // 2. Zóna (30 km felett): Fix felár minden esetben
       if (distanceKm > zone1Limit) {
         const overLimit1Dist = distanceKm - zone1Limit;
         const zone2Fee = overLimit1Dist * feeZone2;
@@ -468,6 +467,11 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
         actMinPrice += zone2Fee;
         dispatchFeeExtra += zone2Fee;
       }
+    }
+
+    // Check if min price is applied
+    if (actPrice < actMinPrice) {
+      minPriceApplied = true;
     }
 
     const unroundedFinal = Math.max(actPrice, actMinPrice);
@@ -483,14 +487,17 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
     setEstimatedPrice(finalPrice);
     setUnitPrice(calculatedUnitPrice ? Math.round(calculatedUnitPrice * 2) / 2 : null);
     setUsedMachine(currentUsedMachine);
+    setMinPriceApplied(minPriceApplied);
 
     // Kiszámítjuk a tényleges kiszállási felárat a kijelzéshez
-    // Ez az összeg, amivel többet fizet a távolság miatt
     const priceWithoutDistance = Math.max(actPrice - (distanceKm && distanceKm > (settings.distanceLimit1 ?? 30) ? (distanceKm - (settings.distanceLimit1 ?? 30)) * (settings.distanceLimit2FeePerKm ?? 300) : 0), actMinPrice - dispatchFeeExtra);
     const roundedWithoutDistance = Math.round(priceWithoutDistance / step) * step;
     setDispatchSurcharge(Math.max(0, finalPrice - roundedWithoutDistance));
 
-    onCalculate(finalPrice, getDetails());
+    onCalculate(finalPrice, {
+      ...getDetails(),
+      minPriceApplied
+    });
   }, [
     serviceType, areaSize, obstacles, segmentation, slope, grassHeight, frequency,
     hedgeLength, hedgeHeight, hedgeWidth, wateringType, wateringCount, wateringArea,
@@ -501,38 +508,65 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
     calculatePrice();
   }, [calculatePrice]);
 
+  // Analytics: Track service selection
+  useEffect(() => {
+    trackEvent('calculator_step', { step: 'service_select', value: serviceType });
+  }, [serviceType]);
+
+  // Analytics: Track result
+  useEffect(() => {
+    if (estimatedPrice !== null && estimatedPrice > 0) {
+      trackEvent('calculator_result', { 
+        serviceType, 
+        price: estimatedPrice,
+        area: areaSize || wateringArea || hedgeLength,
+        location: address
+      });
+    }
+  }, [estimatedPrice]);
+
   const getDetails = () => ({
     locationType, distanceKm, offsetSurcharge: dispatchSurcharge, promotion: isPromoActive ? promo : null
   });
 
   const OptionButton = ({
-    active, onClick, label, icon, subLabel
+    active, onClick, label, icon, subLabel, difficulty = 'easy'
   }: {
-    active: boolean, onClick: () => void, label: string, icon?: React.ReactNode, subLabel?: string
-  }) => (
-    <button
-      onClick={onClick}
-      className={`relative flex items-center justify-center flex-col gap-1.5 md:gap-2 p-2.5 sm:p-4 rounded-2xl border-2 transition-all overflow-hidden ${active
-          ? 'border-emerald-600 bg-emerald-50/50 text-emerald-900 shadow-sm ring-1 ring-emerald-600 ring-offset-1'
-          : 'border-stone-200 bg-white text-stone-600 hover:border-emerald-400 hover:bg-stone-50/50'
-        }`}
-    >
-      {active && (
-        <div className="absolute top-2 right-2 flex items-center justify-center bg-emerald-500 text-white rounded-full p-0.5">
-          <Check className="w-3 h-3" />
+    active: boolean, onClick: () => void, label: string, icon?: React.ReactNode, subLabel?: string, difficulty?: 'easy' | 'medium' | 'hard'
+  }) => {
+    const activeColors = {
+      easy: 'border-emerald-600 bg-emerald-50/50 text-emerald-900 ring-emerald-600',
+      medium: 'border-amber-400 bg-amber-50/50 text-amber-900 ring-amber-400',
+      hard: 'border-orange-500 bg-orange-50/50 text-orange-900 ring-orange-500'
+    };
+
+    return (
+      <button
+        onClick={onClick}
+        className={`relative flex items-center justify-center flex-col gap-1.5 md:gap-2 p-2.5 sm:p-4 rounded-2xl border-2 transition-all overflow-hidden ${active
+            ? `${activeColors[difficulty]} shadow-sm ring-1 ring-offset-1`
+            : 'border-stone-200 bg-white text-stone-600 hover:border-emerald-400 hover:bg-stone-50/50'
+          }`}
+      >
+        {active && (
+          <div className={`absolute top-2 right-2 flex items-center justify-center rounded-full p-0.5 ${
+            difficulty === 'easy' ? 'bg-emerald-500' : difficulty === 'medium' ? 'bg-amber-500' : 'bg-orange-500'
+          } text-white`}>
+            <Check className="w-3 h-3" />
+          </div>
+        )}
+        {icon && (
+          <div className={`${active ? (difficulty === 'easy' ? 'text-emerald-600 icon-emerald' : difficulty === 'medium' ? 'text-amber-600 icon-amber' : 'text-orange-600 icon-orange') : 'text-stone-400 icon-stone'} transition-all duration-300 [&_img]:w-14 [&_img]:h-14`}>
+            {icon}
+          </div>
+        )}
+        <div className="text-center w-full">
+          <span className="block font-semibold text-sm leading-tight text-center">{label}</span>
+          {subLabel && <span className={`block text-xs mt-1 text-center ${active ? 'opacity-80' : 'text-stone-400'}`}>{subLabel}</span>}
         </div>
-      )}
-      {icon && (
-        <div className={`${active ? 'text-emerald-600 icon-emerald' : 'text-stone-400 icon-stone'} transition-all duration-300 [&_img]:w-14 [&_img]:h-14`}>
-          {icon}
-        </div>
-      )}
-      <div className="text-center w-full">
-        <span className="block font-semibold text-sm leading-tight text-center">{label}</span>
-        {subLabel && <span className={`block text-xs mt-1 text-center ${active ? 'text-emerald-600/80' : 'text-stone-400'}`}>{subLabel}</span>}
-      </div>
-    </button>
-  );
+      </button>
+    );
+  };
 
   const ServiceOptionButton = ({
     active, onClick, label, icon, promo
@@ -697,9 +731,9 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
             <div className="bg-stone-50 p-4 rounded-xl border border-stone-100">
               <label className="block text-sm font-semibold text-stone-700 mb-3 text-center">Akadályok száma</label>
               <div className="flex flex-col gap-2">
-                <OptionButton active={obstacles === 'könnyű'} onClick={() => setObstacles('könnyű')} label="Nincs / Könnyű" />
-                <OptionButton active={obstacles === 'kevés'} onClick={() => setObstacles('kevés')} label="Kevés akadály" subLabel="Kerülgetős, pl. bokrok" />
-                <OptionButton active={obstacles === 'sok'} onClick={() => setObstacles('sok')} label="Sok akadály" subLabel="Sűrűn beültetett" />
+                <OptionButton active={obstacles === 'könnyű'} onClick={() => setObstacles('könnyű')} label="Nincs / Könnyű" difficulty="easy" />
+                <OptionButton active={obstacles === 'kevés'} onClick={() => setObstacles('kevés')} label="Kevés akadály" subLabel="Kerülgetős, pl. bokrok" difficulty="medium" />
+                <OptionButton active={obstacles === 'sok'} onClick={() => setObstacles('sok')} label="Sok akadály" subLabel="Sűrűn beültetett" difficulty="hard" />
               </div>
             </div>
 
@@ -707,9 +741,9 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
             <div className="bg-stone-50 p-4 rounded-xl border border-stone-100">
               <label className="block text-sm font-semibold text-stone-700 mb-3 text-center">Terület tagoltsága</label>
               <div className="flex flex-col gap-2">
-                <OptionButton active={segmentation === 'egybefüggő'} onClick={() => setSegmentation('egybefüggő')} label="Egybefüggő" />
-                <OptionButton active={segmentation === 'kissé'} onClick={() => setSegmentation('kissé')} label="Kissé tagolt" subLabel="Osztott terület" />
-                <OptionButton active={segmentation === 'nagyon'} onClick={() => setSegmentation('nagyon')} label="Nagyon tagolt" subLabel="Sok kis részlet" />
+                <OptionButton active={segmentation === 'egybefüggő'} onClick={() => setSegmentation('egybefüggő')} label="Egybefüggő" difficulty="easy" />
+                <OptionButton active={segmentation === 'kissé'} onClick={() => setSegmentation('kissé')} label="Kissé tagolt" subLabel="Osztott terület" difficulty="medium" />
+                <OptionButton active={segmentation === 'nagyon'} onClick={() => setSegmentation('nagyon')} label="Nagyon tagolt" subLabel="Sok kis részlet" difficulty="hard" />
               </div>
             </div>
 
@@ -717,9 +751,9 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
             <div className="bg-stone-50 p-4 rounded-xl border border-stone-100">
               <label className="block text-sm font-semibold text-stone-700 mb-3 text-center">Terület dőlésszöge</label>
               <div className="flex flex-col gap-2">
-                <OptionButton active={slope === 'sima'} onClick={() => setSlope('sima')} label="Sima felület" />
-                <OptionButton active={slope === 'enyhe'} onClick={() => setSlope('enyhe')} label="Enyhén lejtős" />
-                <OptionButton active={slope === 'meredek'} onClick={() => setSlope('meredek')} label="Meredek / Rézsű" subLabel="Figyelem!" />
+                <OptionButton active={slope === 'sima'} onClick={() => setSlope('sima')} label="Sima felület" difficulty="easy" />
+                <OptionButton active={slope === 'enyhe'} onClick={() => setSlope('enyhe')} label="Enyhén lejtős" difficulty="medium" />
+                <OptionButton active={slope === 'meredek'} onClick={() => setSlope('meredek')} label="Meredek / Rézsű" subLabel="Figyelem!" difficulty="hard" />
               </div>
             </div>
           </div>
@@ -872,22 +906,35 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
             <p className="text-emerald-50 text-sm font-medium mb-2 uppercase tracking-widest opacity-80">Indikátoros Kalkulált Ár</p>
             <div className="text-3xl md:text-5xl font-display font-extrabold mb-2 tracking-tight flex flex-col items-center">
               <span>~ {estimatedPrice.toLocaleString('hu-HU')} Ft</span>
+              {minPriceApplied && (
+                <span className="text-xs md:text-sm bg-white/20 px-3 py-1 rounded-full mt-2 font-bold uppercase tracking-wider">
+                  Minimális vállalási ár
+                </span>
+              )}
               {isPromoActive && promo.message && (
                 <span className="text-xs md:text-sm bg-white/20 px-3 py-1 rounded-full mt-2 font-bold animate-pulse">
                   {promo.message}
                 </span>
               )}
             </div>
-            {settings.showUnitPricePerService?.[serviceType] && unitPrice && (
+            
+            {settings.showUnitPricePerService?.[serviceType] && unitPrice && !minPriceApplied && (
               <p className="text-emerald-100 font-medium mb-3">~ {unitPrice.toLocaleString('hu-HU', { minimumFractionDigits: 0, maximumFractionDigits: 1 })} {unitLabel(serviceType, wateringType)}</p>
             )}
 
             <div className="max-w-md mx-auto mt-6 space-y-2">
               {serviceType === 'fuvagas' && usedMachine && (
                 <div className="flex flex-col gap-2">
-                  <div className="flex items-center justify-center gap-2 text-xs md:text-sm bg-emerald-700/50 py-2 px-4 rounded-full backdrop-blur-sm">
-                    {usedMachine === 'traktor' ? <Car className="w-4 h-4" /> : <HardHat className="w-4 h-4" />}
-                    <span>A terület nagysága és tagoltsága alapján a rendszer <strong>{usedMachine === 'traktor' ? 'traktoros' : 'tologatós fűnyíró'}</strong> díjszabással kalkulált.</span>
+                  <div className="flex items-center justify-center gap-2 text-xs md:text-sm bg-emerald-700/50 py-3 px-4 rounded-2xl backdrop-blur-sm border border-emerald-500/20 shadow-inner">
+                    {usedMachine === 'traktor' ? <Car className="w-5 h-5 text-emerald-300" /> : <HardHat className="w-5 h-5 text-amber-300" />}
+                    <div className="text-left">
+                      <p className="font-bold">{usedMachine === 'traktor' ? 'Traktoros fűnyírás' : 'Tologatós fűnyírás'}</p>
+                      <p className="opacity-80 text-[11px] leading-tight mt-0.5">
+                        {usedMachine === 'traktor' 
+                          ? 'A terület mérete alapján gépi nyírásra alkalmas.' 
+                          : 'A terepviszonyok (akadályok, tagoltság) vagy a terület mérete miatt kézi/tologatós fűnyírás szükséges, ami időigényesebb folyamat.'}
+                      </p>
+                    </div>
                   </div>
                   {segmentation === 'nagyon' && usedMachine === 'tologatos' && (settings.forceTologatosOnVerySegmented ?? true) && (
                     <div className="flex items-center justify-center gap-2 text-xs md:text-sm bg-emerald-700/30 text-emerald-100 py-2 px-4 rounded-full backdrop-blur-sm border border-emerald-500/20 italic">

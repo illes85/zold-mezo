@@ -49,6 +49,16 @@ interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const isPermissionError = error instanceof Error && (
+    error.message.includes('permission-denied') || 
+    error.message.includes('Missing or insufficient permissions')
+  );
+
+  if (isPermissionError) {
+    console.warn(`Firestore Access Denied: ${operationType} on '${path}'. Check security rules.`);
+    return;
+  }
+
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
@@ -68,7 +78,6 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     path
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
 }
 
 // Check connection
