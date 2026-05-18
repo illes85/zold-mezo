@@ -8,6 +8,21 @@ import { Settings, Save, LogOut, LayoutDashboard, List, FileText, Check, X, Aler
 import { CalculatorSettings, defaultCalculatorSettings, SectionBlock, CustomBlock, QuoteRequest, QuoteImage } from './types';
 import { v4 as uuidv4 } from 'uuid';
 import ImageCropperModal from './components/ImageCropperModal';
+import ReactQuill from 'react-quill-new';
+import 'react-quill-new/dist/quill.snow.css';
+
+const quillModules = {
+  toolbar: [
+    [{ 'header': [1, 2, 3, false] }],
+    [{ 'font': [] }],
+    [{ 'size': [] }],
+    ['bold', 'italic', 'underline', 'strike'],
+    [{ 'color': [] }, { 'background': [] }],
+    [{ 'align': [] }],
+    [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+    ['clean']
+  ]
+};
 
 const StatCard = ({ title, value, icon, color = "emerald" }: { title: string, value: string | number, icon: React.ReactNode, color?: string }) => (
   <div className="bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
@@ -1353,7 +1368,7 @@ export default function Admin() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 p-6 md:p-10 overflow-y-auto">
+      <main className="flex-1 p-6 md:p-10">
         <div className="max-w-4xl mx-auto">
 
           {/* Status Message */}
@@ -1369,8 +1384,8 @@ export default function Admin() {
           )}
 
           {activeTab === 'settings' && siteSettings && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
+            <div className="space-y-8">
+              <div className="sticky top-0 z-50 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
                 <div>
                   <h1 className="text-3xl font-bold text-stone-900 mb-2">Oldal beállítások</h1>
                   <p className="text-stone-600">Szekciók láthatósága és főbb szövegek szerkesztése.</p>
@@ -1385,7 +1400,8 @@ export default function Admin() {
                 </button>
               </div>
 
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
                 <div className="flex justify-between items-center mb-6">
                   <h2 className="text-xl font-semibold text-stone-800 flex items-center gap-2">
                     <LayoutDashboard className="w-5 h-5 text-emerald-600" />
@@ -1627,12 +1643,13 @@ export default function Admin() {
                   </div>
                 </div>
               </div>
-            </motion.div>
+              </motion.div>
+            </div>
           )}
 
           {activeTab === 'services' && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
+            <div className="space-y-8">
+              <div className="sticky top-0 z-50 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
                 <div>
                   <h1 className="text-3xl font-bold text-stone-900 mb-2">Szolgáltatások kezelése</h1>
                   <p className="text-stone-600">Szolgáltatások be- és kikapcsolása, szövegek módosítása.</p>
@@ -1650,7 +1667,8 @@ export default function Admin() {
                 </button>
               </div>
 
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
                 <h2 className="text-xl font-semibold text-stone-800 mb-6 flex items-center gap-2">
                   <LayoutDashboard className="w-5 h-5 text-emerald-600" />
                   Szolgáltatások megjelenése a főoldalon
@@ -1776,13 +1794,16 @@ export default function Admin() {
                           />
                         </div>
                         <div>
-                          <label className="block text-sm font-medium text-stone-700 mb-1">Leírás</label>
-                          <textarea
-                            rows={4}
-                            value={service.description}
-                            onChange={(e) => handleServiceChange(service.id, 'description', e.target.value)}
-                            className="w-full px-4 py-2 rounded-lg border border-stone-200 focus:ring-2 focus:ring-emerald-500 outline-none resize-none text-stone-900 bg-white"
-                          />
+                          <label className="block text-sm font-medium text-stone-700 mb-1">Leírás (Formázható)</label>
+                          <div className="bg-white rounded-lg border border-stone-200 focus-within:ring-2 focus-within:ring-emerald-500 overflow-hidden [&_.ql-toolbar]:border-none [&_.ql-toolbar]:bg-stone-50 [&_.ql-container]:border-none [&_.ql-editor]:min-h-[150px]">
+                            <ReactQuill
+                              theme="snow"
+                              value={service.description || ''}
+                              onChange={(val) => handleServiceChange(service.id, 'description', val)}
+                              modules={quillModules}
+                              className="text-stone-900"
+                            />
+                          </div>
                         </div>
                         <div>
                           <label className="block text-sm font-medium text-stone-700 mb-1">Ikon beállítása</label>
@@ -1884,14 +1905,15 @@ export default function Admin() {
                 <Plus className="w-5 h-5" />
                 Új szolgáltatás hozzáadása
               </button>
-            </motion.div>
+              </motion.div>
+            </div>
           )}
 
           {activeTab === 'quotes' && <QuotesManager />}
 
           {activeTab === 'calculator' && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
+            <div className="space-y-8">
+              <div className="sticky top-0 z-50 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl shadow-sm border border-stone-200">
                 <div>
                   <h1 className="text-3xl font-bold text-stone-900 mb-2">Árkalkulátor beállítások</h1>
                   <p className="text-stone-600">A kalkulátor képleteinek és alapárainak módosítása.</p>
@@ -1906,8 +1928,9 @@ export default function Admin() {
                 </button>
               </div>
 
-              {/* 0. AKCIÓK ÉS PROMÓCIÓK */}
-              <div className="bg-gradient-to-br from-amber-50 to-orange-50 p-6 rounded-2xl shadow-sm border border-amber-200 space-y-6">
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
+                {/* 0. AKCIÓK ÉS PROMÓCIÓK */}
+                <div className="bg-gradient-to-br from-amber-50 to-orange-50 p-6 rounded-2xl shadow-sm border border-amber-200 space-y-6">
                 <h2 className="text-xl font-bold text-amber-900 flex items-center gap-2">
                   <Calculator className="w-6 h-6 text-amber-600" /> Aktív Akciók és Promóciók
                 </h2>
@@ -2434,7 +2457,8 @@ export default function Admin() {
                   </div>
                 </div>
               </div>
-            </motion.div>
+              </motion.div>
+            </div>
           )}
 
           {activeTab === 'statistics' && (
