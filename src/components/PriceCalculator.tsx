@@ -30,18 +30,14 @@ function MapFocus({ center }: { center: [number, number] }) {
 const FOT_LON = 19.1914;
 const FOT_LAT = 47.6133;
 
-function unitLabel(serviceType: string, wateringType: string): string {
-  switch (serviceType) {
-    case 'funyiras':
-    case 'kaszo':
-      return 'Ft/m²';
-    case 'locsolas':
-      return wateringType === 'fak' ? 'Ft/fa' : 'Ft/m²';
-    case 'soveny':
-      return 'Ft/fm';
-    default:
-      return 'Ft/m²';
+function unitLabel(isWatering: boolean, isHedge: boolean, wateringType: string): string {
+  if (isWatering) {
+    return wateringType === 'fak' ? 'Ft/fa' : 'Ft/m²';
   }
+  if (isHedge) {
+    return 'Ft/fm';
+  }
+  return 'Ft/m²';
 }
 
 interface CalculatorProps {
@@ -66,46 +62,18 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
 
   // Szolgáltatás kiválasztás
   const availableServices = useMemo(() => {
-    const opts = [];
-    const titles = activeServices.map(s => (s.title || '').toLowerCase());
-    const hasFunyiras = titles.some(t => t.includes('fűnyírás') || t.includes('traktor') || t.includes('tologat'));
-    const hasKaszo = titles.some(t => t.includes('kasz') || t.includes('bozót'));
-    const hasSoveny = titles.some(t => t.includes('sövény'));
-    const hasLocsolas = titles.some(t => t.includes('locsol') || t.includes('öntöz'));
-
-    // Ha semmi nincs aktiválva, defaultokat használunk
-    if (activeServices.length === 0 || hasFunyiras || hasKaszo) {
-      const s = activeServices.find(s => (s.title || '').toLowerCase().includes('fűvágás') || (s.title || '').toLowerCase().includes('traktor') || (s.title || '').toLowerCase().includes('tologat'));
-      opts.push({
-        id: 'fuvagas',
-        label: 'Fűvágás',
-        icon: s?.iconUrl ? <img src={s.iconUrl} className="w-14 h-14 object-contain" alt="" /> : <Sprout className="w-10 h-10" />
+    return activeServices
+      .filter(s => s.showInCalculator !== false)
+      .map(s => {
+        const promo = settings.promotions?.[s.id];
+        return {
+          id: s.id,
+          label: s.title,
+          icon: s.iconUrl ? <img src={s.iconUrl} className="w-14 h-14 object-contain" alt="" /> : <Sprout className="w-10 h-10" />,
+          promo: (promo && promo.isActive) ? promo : null,
+          titleLC: (s.title || '').toLowerCase()
+        };
       });
-    }
-    if (activeServices.length === 0 || hasLocsolas) {
-      const s = activeServices.find(s => (s.title || '').toLowerCase().includes('locsol') || (s.title || '').toLowerCase().includes('öntöz'));
-      opts.push({
-        id: 'locsolas',
-        label: 'Locsolás (hamarosan)',
-        icon: s?.iconUrl ? <img src={s.iconUrl} className="w-14 h-14 object-contain" alt="" /> : <Droplets className="w-10 h-10" />
-      });
-    }
-    if (activeServices.length === 0 || hasSoveny) {
-      const s = activeServices.find(s => (s.title || '').toLowerCase().includes('sövény'));
-      opts.push({
-        id: 'soveny',
-        label: 'Sövénynyírás',
-        icon: s?.iconUrl ? <img src={s.iconUrl} className="w-14 h-14 object-contain" alt="" /> : <Scissors className="w-10 h-10" />
-      });
-    }
-
-    return opts.map(opt => {
-      const promo = settings.promotions?.[opt.id];
-      return {
-        ...opt,
-        promo: (promo && promo.isActive) ? promo : null
-      };
-    });
   }, [activeServices, settings.promotions]);
 
   const [serviceType, setServiceType] = useState<string>('fuvagas');
@@ -118,6 +86,12 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
 
   const promo = settings.promotions?.[serviceType];
   const isPromoActive = promo && promo.isActive;
+
+  const currentServiceObj = availableServices.find(s => s.id === serviceType);
+  const currentTitleLC = currentServiceObj?.titleLC || '';
+  const isGrass = currentTitleLC.includes('fű') || currentTitleLC.includes('traktor') || currentTitleLC.includes('tologat') || currentTitleLC.includes('kasz') || currentTitleLC.includes('bozót');
+  const isWatering = currentTitleLC.includes('locsol') || currentTitleLC.includes('öntöz');
+  const isHedge = currentTitleLC.includes('sövény');
 
   // Alap paraméterek
   const [areaSize, setAreaSize] = useState<string>('');
@@ -308,7 +282,7 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
 
     const surchargeMultiplier = 1 + (surchargePercent / 100);
 
-    if (serviceType === 'fuvagas') {
+    if (isGrass) {
       const parseArea = (val: string) => {
         if (!val) return 0;
         let cleaned = val.replace(/\s/g, '');
@@ -384,7 +358,7 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
         calculatedUnitPrice = trakBase * surchargeMultiplier * grassMultiplier;
       }
 
-    } else if (serviceType === 'locsolas') {
+    } else if (isWatering) {
       if (wateringType === 'fak') {
         const db = Number(wateringCount);
         if (!db || db <= 0) { setEstimatedPrice(null); return; }
@@ -406,7 +380,7 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
         actMinPrice = settings.wateringMinPrice || 20000;
         calculatedUnitPrice = basePlantPrice * surchargeMultiplier;
       }
-    } else if (serviceType === 'soveny') {
+    } else if (isHedge) {
       const hl = Number(hedgeLength);
       const hh = Number(hedgeHeight);
       if (!hl || !hh || hl <= 0 || hh <= 0) { setEstimatedPrice(null); return; }
@@ -641,7 +615,7 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
         </h3>
 
         {/* Fűvágás */}
-        {serviceType === 'fuvagas' && (
+        {isGrass && (
           <div className="bg-stone-50 p-4 sm:p-6 rounded-2xl border border-stone-100">
             <div className="max-w-sm">
               <label className="block text-sm font-medium text-stone-700 mb-2">Terület mérete (m²)</label>
@@ -666,7 +640,7 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
         )}
 
         {/* Locsolás */}
-        {serviceType === 'locsolas' && (
+        {isWatering && (
           <div className="bg-stone-50 p-4 sm:p-6 rounded-2xl border border-stone-100 space-y-6">
             <div className="flex flex-col sm:flex-row gap-4">
               <label className="flex items-center gap-3 cursor-pointer bg-white p-3 rounded-xl border border-stone-200 flex-1 hover:border-emerald-300 transition-colors">
@@ -691,7 +665,7 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
         )}
 
         {/* Sövénynyírás */}
-        {serviceType === 'soveny' && (
+        {isHedge && (
           <div className="bg-stone-50 p-4 sm:p-6 rounded-2xl border border-stone-100 grid md:grid-cols-3 gap-6">
             <div>
               <label className="block text-sm font-medium text-stone-700 mb-2">Hossz (m)</label>
@@ -719,7 +693,7 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
       </div>
 
       {/* 3. Terepviszonyok (Csak Fűvágás esetén releváns nagyrészt) */}
-      {serviceType === 'fuvagas' && (
+      {isGrass && (
         <div className="space-y-6">
           <h3 className="text-lg font-bold text-stone-800 flex items-center gap-2">
             <span className="flex items-center justify-center w-8 h-8 rounded-full bg-emerald-100 text-emerald-600 text-sm">3</span>
@@ -919,11 +893,11 @@ export default function PriceCalculator({ onCalculate, onServiceChange, activeSe
             </div>
             
             {settings.showUnitPricePerService?.[serviceType] && unitPrice && !minPriceApplied && (
-              <p className="text-emerald-100 font-medium mb-3">~ {unitPrice.toLocaleString('hu-HU', { minimumFractionDigits: 0, maximumFractionDigits: 1 })} {unitLabel(serviceType, wateringType)}</p>
+              <p className="text-emerald-100 font-medium mb-3">~ {unitPrice.toLocaleString('hu-HU', { minimumFractionDigits: 0, maximumFractionDigits: 1 })} {unitLabel(isWatering, isHedge, wateringType)}</p>
             )}
 
             <div className="max-w-md mx-auto mt-6 space-y-2">
-              {serviceType === 'fuvagas' && usedMachine && (
+              {isGrass && usedMachine && (
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center justify-center gap-2 text-xs md:text-sm bg-emerald-700/50 py-3 px-4 rounded-2xl backdrop-blur-sm border border-emerald-500/20 shadow-inner">
                     {usedMachine === 'traktor' ? <Car className="w-5 h-5 text-emerald-300" /> : <HardHat className="w-5 h-5 text-amber-300" />}

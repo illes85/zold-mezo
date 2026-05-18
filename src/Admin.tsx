@@ -558,6 +558,7 @@ export default function Admin() {
       iconName: 'Settings',
       image: '',
       isActive: false,
+      showInCalculator: true,
       order: prev.length + 1,
       isNew: true
     }]);
@@ -1760,7 +1761,7 @@ export default function Admin() {
                       <div className="flex items-center gap-4">
                         <label className="flex items-center gap-3 cursor-pointer">
                           <span className={`text-sm font-medium ${service.isActive ? 'text-emerald-600' : 'text-stone-600'}`}>
-                            {service.isActive ? 'Aktív' : 'Inaktív'}
+                            {service.isActive ? 'Főoldalon Aktív' : 'Főoldalon Inaktív'}
                           </span>
                           <div className="relative inline-flex items-center">
                             <input
@@ -1770,6 +1771,21 @@ export default function Admin() {
                               onChange={(e) => handleServiceChange(service.id, 'isActive', e.target.checked)}
                             />
                             <div className="w-11 h-6 bg-stone-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-stone-400 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                          </div>
+                        </label>
+                        <div className="w-px h-6 bg-stone-300 mx-2"></div>
+                        <label className="flex items-center gap-3 cursor-pointer">
+                          <span className={`text-sm font-medium ${service.showInCalculator !== false ? 'text-blue-600' : 'text-stone-600'}`}>
+                            Kalkulátorban is
+                          </span>
+                          <div className="relative inline-flex items-center">
+                            <input
+                              type="checkbox"
+                              className="sr-only peer"
+                              checked={service.showInCalculator !== false}
+                              onChange={(e) => handleServiceChange(service.id, 'showInCalculator', e.target.checked)}
+                            />
+                            <div className="w-11 h-6 bg-stone-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-stone-400 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                           </div>
                         </label>
                         <button
